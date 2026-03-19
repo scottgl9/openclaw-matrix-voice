@@ -57,6 +57,9 @@ async function main(): Promise<void> {
     const voiceCallHandler = matrixService.getVoiceCallHandler();
     voiceCallHandler.setSTTService(sttService);
     log.info('STT service wired to voice call handler');
+
+    // Attempt to recover calls from previous run
+    await voiceCallHandler.recoverSessions();
   } catch (error: any) {
     log.error('Failed to connect to Matrix', { error: error.message });
     process.exit(1);

@@ -9,6 +9,7 @@ import { VadService } from '../services/vad-service.js';
 import { STTService } from '../services/stt-adapter.js';
 import { LiveKitAgentService } from '../services/livekit-agent-service.js';
 import { LiveKitAudioIngress, LiveKitAudioEgress } from '../services/livekit-audio-transport.js';
+import { CallStore, StoredCallSession } from '../services/call-store.js';
 
 export interface CallState {
   isActive: boolean;
@@ -29,8 +30,8 @@ export class VoiceCallHandler {
   private ttsService: ChatterboxTTSService;
   private activeCalls: Map<string, CallState> = new Map();
 
-  // STT service factory - each call gets its own TurnProcessor but shares STT adapter type
   private sttService: STTService | null = null;
+  private callStore: CallStore;
 
   constructor(
     matrixService: MatrixClientService,
@@ -41,6 +42,7 @@ export class VoiceCallHandler {
     this.client = matrixService.getClient();
     this.openClawService = openClawService;
     this.ttsService = ttsService;
+    this.callStore = new CallStore();
   }
 
   /**
@@ -49,6 +51,33 @@ export class VoiceCallHandler {
   setSTTService(sttService: STTService): void {
     this.sttService = sttService;
     console.log('[VoiceCallHandler] STT service set');
+  }
+
+  /**
+   * Load stored sessions and attempt to recover LiveKit calls from a previous run.
+   */
+  async recoverSessions(): Promise<void> {
+    await this.callStore.load();
+    const sessions = this.callStore.getSessions();
+
+    if (sessions.length === 0) return;
+
+    console.log(`[VoiceCallHandler] Recovering ${sessions.length} stored call sessions`);
+
+    for (const session of sessions) {
+      if (session.isLiveKitCall && session.livekitUrl && session.livekitAlias) {
+        try {
+          await this.startLiveKitCall(session.roomId, session.livekitUrl, session.livekitAlias);
+          console.log(`[VoiceCallHandler] Recovered LiveKit call in ${session.roomId}`);
+        } catch (error: any) {
+          console.warn(`[VoiceCallHandler] Failed to recover call in ${session.roomId}:`, error.message);
+          await this.callStore.removeSession(session.roomId);
+        }
+      } else {
+        // Non-LiveKit calls can't be recovered — just clean up
+        await this.callStore.removeSession(session.roomId);
+      }
+    }
   }
 
   /**
@@ -187,6 +216,16 @@ export class VoiceCallHandler {
       await this.initializeAudioPipeline(roomId, callState);
 
       this.activeCalls.set(roomId, callState);
+
+      // Persist session for recovery
+      await this.callStore.addSession({
+        roomId,
+        isLiveKitCall: true,
+        livekitUrl: livekitUrl,
+        livekitAlias: livekitAlias,
+        startedAt: new Date().toISOString(),
+      });
+
       console.log(`[VoiceCallHandler] Joined LiveKit call in ${roomId}`);
     } catch (error: any) {
       console.error('[VoiceCallHandler] Error joining LiveKit call:', error.message);
@@ -222,6 +261,14 @@ export class VoiceCallHandler {
           callState.livekitAgent = agent;
 
           await this.initializeAudioPipeline(roomId, callState);
+
+          await this.callStore.addSession({
+            roomId,
+            isLiveKitCall: true,
+            livekitUrl: liveKitService.getUrl(),
+            livekitAlias: room.name,
+            startedAt: new Date().toISOString(),
+          });
 
           console.log(`[VoiceCallHandler] LiveKit call started in ${roomId}`);
         } catch (error: any) {
@@ -306,6 +353,15 @@ export class VoiceCallHandler {
 
     pipeline.on('turn.complete', async (event: any) => {
       console.log('[VoiceCallHandler] Turn complete event, processing...');
+
+      // Release active speaker lock in the mux so next person can speak
+      if (callState.livekitAgent) {
+        const ingress = pipeline.getIngress();
+        if (ingress && 'turnCompleted' in ingress) {
+          (ingress as LiveKitAudioIngress).turnCompleted();
+        }
+      }
+
       await turnProcessor.handleTurnCompletion(event);
     });
 
@@ -378,6 +434,7 @@ export class VoiceCallHandler {
       }
 
       this.activeCalls.delete(roomId);
+      await this.callStore.removeSession(roomId);
     }
 
     await this.matrixService.sendMessage(roomId, 'Voice call ended.');

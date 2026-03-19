@@ -2,44 +2,49 @@
  * LiveKit Audio Transport
  *
  * Implements AudioIngress and AudioEgress interfaces backed by LiveKitAgentService.
- * Bridges the AudioPipelineService with real LiveKit room audio.
+ * Includes per-participant audio multiplexing via ParticipantAudioMux.
  */
 
 import { EventEmitter } from 'events';
 import { AudioFrame, AudioIngress, AudioEgress } from './audio-pipeline.js';
 import { LiveKitAgentService } from './livekit-agent-service.js';
-import { resample } from './audio-resampler.js';
-
-const LIVEKIT_SAMPLE_RATE = 48000;
-const PIPELINE_SAMPLE_RATE = 16000;
+import { ParticipantAudioMux, MuxMode, ParticipantFrame } from './participant-audio-mux.js';
 
 /**
  * LiveKit Audio Ingress
- * Receives audio frames from LiveKitAgentService and emits them as pipeline AudioFrames.
+ * Receives audio frames from LiveKitAgentService, routes through participant
+ * mux, and emits pipeline-ready AudioFrames.
  */
 export class LiveKitAudioIngress extends EventEmitter implements AudioIngress {
   private agent: LiveKitAgentService;
   private active: boolean = false;
-  private frameHandler: ((frame: AudioFrame) => void) | null = null;
+  private frameHandler: ((frame: ParticipantFrame) => void) | null = null;
+  private mux: ParticipantAudioMux;
 
-  constructor(agent: LiveKitAgentService) {
+  constructor(agent: LiveKitAgentService, muxMode: MuxMode = 'mix') {
     super();
     this.agent = agent;
+    this.mux = new ParticipantAudioMux(muxMode);
+
+    // Forward mux output to pipeline
+    this.mux.on('frame', (frame: AudioFrame) => {
+      if (this.active) {
+        this.emit('frame', frame);
+      }
+    });
   }
 
   async start(): Promise<void> {
     this.active = true;
 
-    // Listen for audio frames from the agent
-    this.frameHandler = (frame: AudioFrame) => {
+    this.frameHandler = (frame: ParticipantFrame) => {
       if (this.active) {
-        this.emit('frame', frame);
+        this.mux.processFrame(frame);
       }
     };
     this.agent.on('audio.frame', this.frameHandler);
 
     this.emit('start');
-    console.log('[LiveKitIngress] Started');
   }
 
   async stop(): Promise<void> {
@@ -51,7 +56,6 @@ export class LiveKitAudioIngress extends EventEmitter implements AudioIngress {
     }
 
     this.emit('stop');
-    console.log('[LiveKitIngress] Stopped');
   }
 
   isActive(): boolean {
@@ -59,8 +63,21 @@ export class LiveKitAudioIngress extends EventEmitter implements AudioIngress {
   }
 
   async getFrame(): Promise<AudioFrame | null> {
-    // Push-based only - frames come via events
     return null;
+  }
+
+  /**
+   * Notify the mux that a turn completed (releases active speaker lock in 'separate' mode).
+   */
+  turnCompleted(): void {
+    this.mux.turnCompleted();
+  }
+
+  /**
+   * Get the underlying participant mux for inspection/control.
+   */
+  getMux(): ParticipantAudioMux {
+    return this.mux;
   }
 }
 
@@ -80,13 +97,11 @@ export class LiveKitAudioEgress extends EventEmitter implements AudioEgress {
   async start(): Promise<void> {
     this.active = true;
     this.emit('start');
-    console.log('[LiveKitEgress] Started');
   }
 
   async stop(): Promise<void> {
     this.active = false;
     this.emit('stop');
-    console.log('[LiveKitEgress] Stopped');
   }
 
   isActive(): boolean {
@@ -102,7 +117,6 @@ export class LiveKitAudioEgress extends EventEmitter implements AudioEgress {
       throw new Error('LiveKit agent not connected');
     }
 
-    // Publish the audio buffer - the agent handles resampling to 48kHz
     await this.agent.publishAudioBuffer(frame.data, frame.sampleRate);
     this.emit('frame.sent', frame);
   }

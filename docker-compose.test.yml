@@ -1,0 +1,32 @@
+##
+## Integration test stack
+##
+## Spins up LiveKit + a mock Whisper server for end-to-end testing.
+## Usage:
+##   docker compose -f docker-compose.test.yml up -d
+##   npm run test:integration
+##   docker compose -f docker-compose.test.yml down
+##
+
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    command: >
+      --dev
+      --bind 0.0.0.0
+    ports:
+      - "7880:7880"
+      - "7881:7881/udp"
+    environment:
+      LIVEKIT_KEYS: "devkey: devsecret"
+
+  ## Mock Whisper server - returns canned transcriptions for testing.
+  ## Replace with real faster-whisper-server for full integration tests.
+  mock-whisper:
+    image: node:20-slim
+    working_dir: /app
+    volumes:
+      - ./infra/mock-whisper:/app
+    command: ["node", "server.mjs"]
+    ports:
+      - "8090:8090"
