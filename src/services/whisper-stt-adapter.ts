@@ -9,6 +9,7 @@ import axios from 'axios';
 import { WaveFile } from 'wavefile';
 import { STTAdapter, STTResult } from './stt-adapter.js';
 import { AudioFrame } from './audio-pipeline.js';
+import { withRetry } from '../utils/retry.js';
 
 export interface WhisperConfig {
   url: string;
@@ -32,7 +33,6 @@ export class WhisperSTTAdapter implements STTAdapter {
     try {
       await axios.get(`${this.config.url}/health`, { timeout: 5000 });
     } catch {
-      // Some servers don't have /health - try /v1/models instead
       try {
         await axios.get(`${this.config.url}/v1/models`, { timeout: 5000 });
       } catch {
@@ -55,7 +55,6 @@ export class WhisperSTTAdapter implements STTAdapter {
       throw new Error('Whisper adapter not initialized');
     }
 
-    // Accumulate frames - Whisper works on complete utterances, not streaming
     this.frameBuffer.push(frame);
     return null;
   }
@@ -69,7 +68,7 @@ export class WhisperSTTAdapter implements STTAdapter {
       return { text: '', confidence: 0 };
     }
 
-    // Concatenate all accumulated frames into a single PCM buffer
+    // Concatenate frames into a single PCM buffer
     const totalLength = this.frameBuffer.reduce((sum, f) => sum + f.data.length, 0);
     const pcmData = Buffer.alloc(totalLength);
     let offset = 0;
@@ -81,38 +80,39 @@ export class WhisperSTTAdapter implements STTAdapter {
     const sampleRate = this.frameBuffer[0].sampleRate;
     const channels = this.frameBuffer[0].channels;
 
-    // Convert PCM to WAV using wavefile
     const wavBuffer = this.pcmToWav(pcmData, sampleRate, channels);
 
-    // POST to Whisper API
-    try {
-      const formData = new FormData();
-      formData.append('file', new Blob([wavBuffer], { type: 'audio/wav' }), 'audio.wav');
-      formData.append('model', this.config.model || 'whisper-1');
-      if (this.config.language) {
-        formData.append('language', this.config.language);
-      }
-      formData.append('response_format', 'json');
+    // POST to Whisper API with retry
+    const result = await withRetry(
+      async () => {
+        const formData = new FormData();
+        formData.append('file', new Blob([wavBuffer], { type: 'audio/wav' }), 'audio.wav');
+        formData.append('model', this.config.model || 'whisper-1');
+        if (this.config.language) {
+          formData.append('language', this.config.language);
+        }
+        formData.append('response_format', 'json');
 
-      const response = await axios.post(
-        `${this.config.url}/v1/audio/transcriptions`,
-        formData,
-        { timeout: 30000 }
-      );
+        const response = await axios.post(
+          `${this.config.url}/v1/audio/transcriptions`,
+          formData,
+          { timeout: 30000 }
+        );
 
-      const text = response.data.text || '';
-      console.log(`[STT/Whisper] Transcribed: "${text}"`);
+        return response.data;
+      },
+      { maxAttempts: 2, label: 'Whisper STT', timeoutMs: 30000 }
+    );
 
-      return {
-        text: text.trim(),
-        confidence: 0.9,
-        language: this.config.language || response.data.language || 'en',
-        durationMs: (pcmData.length / (sampleRate * 2 * channels)) * 1000,
-      };
-    } catch (error: any) {
-      console.error('[STT/Whisper] Transcription error:', error.message);
-      throw new Error(`Whisper transcription failed: ${error.message}`);
-    }
+    const text = result.text || '';
+    console.log(`[STT/Whisper] Transcribed: "${text}"`);
+
+    return {
+      text: text.trim(),
+      confidence: 0.9,
+      language: this.config.language || result.language || 'en',
+      durationMs: (pcmData.length / (sampleRate * 2 * channels)) * 1000,
+    };
   }
 
   reset(): void {
@@ -127,13 +127,9 @@ export class WhisperSTTAdapter implements STTAdapter {
     return 'Whisper';
   }
 
-  /**
-   * Convert raw PCM16 LE data to a WAV buffer
-   */
   private pcmToWav(pcmData: Buffer, sampleRate: number, channels: number): Buffer {
     const wav = new WaveFile();
 
-    // Convert Buffer to Int16Array for wavefile
     const samples = new Int16Array(pcmData.length / 2);
     for (let i = 0; i < samples.length; i++) {
       samples[i] = pcmData.readInt16LE(i * 2);

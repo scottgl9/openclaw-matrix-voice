@@ -1,10 +1,9 @@
 import { config, validateConfig } from './config/index.js';
 import { OpenClawService } from './services/openclaw-service.js';
 import { ChatterboxTTSService } from './services/chatterbox-tts-service.js';
-import { createMatrixClientService } from './services/matrix-client-service.js';
+import { createMatrixClientService, MatrixClientService } from './services/matrix-client-service.js';
 import { STTService, MockSTTAdapter } from './services/stt-adapter.js';
 import { WhisperSTTAdapter } from './services/whisper-stt-adapter.js';
-import { TurnProcessorService } from './services/turn-processor.js';
 
 async function main(): Promise<void> {
   console.log('OpenClaw Matrix Voice Call Service');
@@ -45,10 +44,7 @@ async function main(): Promise<void> {
     console.log('  - STT: Mock (set WHISPER_URL to enable Whisper)');
   }
   await sttService.initialize();
-
-  const turnProcessor = new TurnProcessorService(openClawService, ttsService, sttService);
-  await turnProcessor.initialize();
-  console.log('  - Turn Processor: Ready');
+  console.log('  - STT Service: Ready');
 
   // Create Matrix client
   console.log('\nConnecting to Matrix...');
@@ -58,27 +54,29 @@ async function main(): Promise<void> {
     await matrixService.start();
     console.log('Matrix client connected\n');
 
-    // Wire turn processor to voice call handler
+    // Wire STT service to voice call handler (per-call TurnProcessors use this)
     const voiceCallHandler = matrixService.getVoiceCallHandler();
-    voiceCallHandler.setTurnProcessor(turnProcessor);
-    console.log('  - Turn processor wired to voice call handler\n');
+    voiceCallHandler.setSTTService(sttService);
+    console.log('  - STT service wired to voice call handler\n');
   } catch (error: any) {
     console.error('Failed to connect to Matrix:', error.message);
     process.exit(1);
   }
 
-  // Set up graceful shutdown
-  process.on('SIGINT', async () => {
-    console.log('\nShutting down...');
-    matrixService.stop();
+  // Set up graceful shutdown - drain active calls before exiting
+  const shutdown = async (signal: string) => {
+    console.log(`\n${signal} received. Shutting down gracefully...`);
+    try {
+      await matrixService.stop();
+      await sttService.shutdown();
+    } catch (error) {
+      console.error('Error during shutdown:', error);
+    }
     process.exit(0);
-  });
+  };
 
-  process.on('SIGTERM', async () => {
-    console.log('\nShutting down...');
-    matrixService.stop();
-    process.exit(0);
-  });
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   console.log('Service is running. Press Ctrl+C to stop.\n');
   console.log('Commands:');

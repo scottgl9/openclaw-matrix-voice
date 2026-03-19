@@ -110,7 +110,6 @@ export class VadService extends EventEmitter {
 
   // Buffering
   private preRollBuffer: AudioFrame[] = [];
-  private postRollBuffer: AudioFrame[] = [];
   private currentSpeechFrames: AudioFrame[] = [];
 
   // Statistics
@@ -383,7 +382,6 @@ export class VadService extends EventEmitter {
 
   private clearBuffers(): void {
     this.preRollBuffer = [];
-    this.postRollBuffer = [];
     this.currentSpeechFrames = [];
   }
 

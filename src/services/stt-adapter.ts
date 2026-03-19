@@ -248,8 +248,3 @@ export class STTService {
     return this.adapter.getName();
   }
 }
-
-/**
- * Default STT service with mock adapter
- */
-export const mockSTTService = new STTService(new MockSTTAdapter());

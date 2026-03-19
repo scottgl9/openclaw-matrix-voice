@@ -89,8 +89,9 @@ describe('VoiceCallHandler', () => {
       await handler.startCall(roomId);
       await handler.endCall(roomId);
 
+      // endCall removes the call from the map
       const callState = handler.getAllCallStates().get(roomId);
-      expect(callState?.isActive).toBe(false);
+      expect(callState).toBeUndefined();
       expect(mockMatrixService.sendMessage).toHaveBeenCalledWith(
         roomId,
         expect.stringContaining('Voice call ended')
@@ -163,7 +164,7 @@ describe('VoiceCallHandler', () => {
       });
 
       const callState = handler.getAllCallStates().get(roomId);
-      expect(callState?.isActive).toBe(false);
+      expect(callState).toBeUndefined();
     });
 
     it('should handle MatrixRTC m.call.member events', async () => {

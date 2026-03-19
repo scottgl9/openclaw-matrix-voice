@@ -4,12 +4,10 @@ import { OpenClawService } from './openclaw-service.js';
 import { ChatterboxTTSService } from './chatterbox-tts-service.js';
 import { VoiceCallHandler } from '../handlers/voice-call-handler.js';
 import { LiveKitService } from './livekit-service.js';
-import { AudioPipelineService } from './audio-pipeline.js';
 
 export class MatrixClientService {
   private client: MatrixClient;
   private voiceCallHandler: VoiceCallHandler;
-  private audioPipeline: AudioPipelineService | null;
   private liveKitService: LiveKitService | null;
   private isRunning = false;
 
@@ -22,15 +20,6 @@ export class MatrixClientService {
   ) {
     const storage = new SimpleFsStorageProvider('./bot-storage.json');
     this.client = new MatrixClient(homeserver, accessToken, storage);
-
-    // Initialize audio pipeline (Phase 4)
-    this.audioPipeline = new AudioPipelineService({
-      sampleRate: config.audio.sampleRate,
-      channels: 1,
-      format: config.audio.format,
-      frameDurationMs: 20,
-      loopbackEnabled: true,
-    });
 
     // Initialize LiveKit service if enabled
     this.liveKitService = null;
@@ -53,15 +42,8 @@ export class MatrixClientService {
   async start(): Promise<void> {
     console.log('Starting Matrix client...');
 
-    // Enable auto-join for invited rooms
     AutojoinRoomsMixin.setupOnClient(this.client);
 
-    // Initialize audio pipeline (Phase 4)
-    if (this.audioPipeline) {
-      await this.audioPipeline.initialize();
-      await this.audioPipeline.start();
-      console.log('Audio pipeline initialized');
-    }
     this.setupEventHandlers();
 
     // Start LiveKit service if enabled
@@ -79,14 +61,16 @@ export class MatrixClientService {
   }
 
   /**
-   * Stop the Matrix client
+   * Stop the Matrix client. Drains active calls first.
    */
-  stop(): void {
+  async stop(): Promise<void> {
     console.log('Stopping Matrix client...');
 
-    // Stop audio pipeline (Phase 4)
-    if (this.audioPipeline) {
-      this.audioPipeline.stop().catch(() => {});
+    // Drain active calls before shutting down
+    try {
+      await this.voiceCallHandler.endAllCalls();
+    } catch (error) {
+      console.error('Error draining active calls:', error);
     }
 
     // Stop LiveKit service if running
@@ -98,49 +82,25 @@ export class MatrixClientService {
     this.isRunning = false;
   }
 
-  /**
-   * Check if client is running
-   */
   isRunningStatus(): boolean {
     return this.isRunning;
   }
 
-  /**
-   * Get the Matrix client instance
-   */
   getClient(): MatrixClient {
     return this.client;
   }
 
-  /**
-   * Get the voice call handler
-   */
   getVoiceCallHandler(): VoiceCallHandler {
     return this.voiceCallHandler;
   }
 
-  /**
-   * Get the LiveKit service
-   */
   getLiveKitService(): LiveKitService | null {
     return this.liveKitService;
   }
 
-  /**
-   * Get the audio pipeline (Phase 4)
-   */
-  getAudioPipeline(): AudioPipelineService | null {
-    return this.audioPipeline;
-  }
-
-  /**
-   * Set up event handlers for voice calls
-   */
   private setupEventHandlers(): void {
-    // Handle room messages
     this.client.on('room.message', async (roomId, event) => {
       try {
-        // Check if this is a voice call related message
         if (event['m.relates_to']?.rel_type === 'm.reference') {
           await this.voiceCallHandler.handleReference(roomId, event);
         } else if (event['content']?.['m.reply_to']) {
@@ -151,7 +111,6 @@ export class MatrixClientService {
       }
     });
 
-    // Handle room events (for call control and MatrixRTC)
     this.client.on('room.event', async (roomId, event) => {
       try {
         await this.voiceCallHandler.handleEvent(roomId, event);
@@ -160,29 +119,19 @@ export class MatrixClientService {
       }
     });
 
-    // Handle encryption errors
     this.client.on('room.encryptionError', async (roomId, event) => {
       console.error('Encryption error in room:', roomId, event);
     });
   }
 
-  /**
-   * Join a specific room
-   */
   async joinRoom(roomIdOrAlias: string): Promise<string> {
     return this.client.joinRoom(roomIdOrAlias);
   }
 
-  /**
-   * Send a text message to a room
-   */
   async sendMessage(roomId: string, text: string): Promise<void> {
     await this.client.sendText(roomId, text);
   }
 
-  /**
-   * Send an audio message (voice note) to a room
-   */
   async sendAudio(roomId: string, audioData: Buffer, mimeType: string): Promise<void> {
     const mxcUri = await this.client.uploadContent(audioData, mimeType);
 

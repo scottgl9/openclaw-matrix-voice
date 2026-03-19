@@ -111,9 +111,12 @@ describe('WhisperSTTAdapter', () => {
       await adapter.initialize();
       await adapter.transcribeFrame(makeFrame());
 
-      vi.mocked(axios.post).mockRejectedValueOnce(new Error('Service unavailable'));
+      // Must reject for both retry attempts
+      vi.mocked(axios.post)
+        .mockRejectedValueOnce(new Error('Service unavailable'))
+        .mockRejectedValueOnce(new Error('Service unavailable'));
 
-      await expect(adapter.finalize()).rejects.toThrow('Whisper transcription failed');
+      await expect(adapter.finalize()).rejects.toThrow('Service unavailable');
     });
   });
 

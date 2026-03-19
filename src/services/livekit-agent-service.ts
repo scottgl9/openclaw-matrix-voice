@@ -3,17 +3,13 @@
  *
  * Connects the bot as a real-time participant in a LiveKit room using @livekit/rtc-node.
  * Handles subscribing to remote audio tracks and publishing bot audio.
- *
- * Audio flow:
- *   Remote participant audio -> TrackSubscribed -> AudioStream -> resample 48kHz->16kHz -> emit 'audio.frame'
- *   Bot TTS audio -> resample to 48kHz -> AudioSource -> LocalAudioTrack -> published to room
+ * Includes auto-reconnection with exponential backoff.
  */
 
 import { EventEmitter } from 'events';
 import { LiveKitService } from './livekit-service.js';
 import { resample, int16ArrayToBuffer, bufferToInt16Array } from './audio-resampler.js';
 
-// LiveKit RTC Node SDK types - dynamically imported to allow graceful degradation
 let rtcNode: any = null;
 
 async function loadRtcNode(): Promise<any> {
@@ -31,12 +27,22 @@ async function loadRtcNode(): Promise<any> {
 const LIVEKIT_SAMPLE_RATE = 48000;
 const PIPELINE_SAMPLE_RATE = 16000;
 
+const MAX_RECONNECT_ATTEMPTS = 5;
+const INITIAL_RECONNECT_DELAY_MS = 1000;
+
 export class LiveKitAgentService extends EventEmitter {
   private livekitService: LiveKitService;
   private room: any = null;
   private audioSource: any = null;
   private localAudioTrack: any = null;
   private connected: boolean = false;
+
+  // Reconnection state
+  private reconnectAttempts: number = 0;
+  private reconnecting: boolean = false;
+  private intentionalDisconnect: boolean = false;
+  private lastUrl: string = '';
+  private lastToken: string = '';
 
   constructor(livekitService: LiveKitService) {
     super();
@@ -54,9 +60,13 @@ export class LiveKitAgentService extends EventEmitter {
 
     console.log('[LiveKitAgent] Joining LiveKit room...');
 
+    this.lastUrl = url;
+    this.lastToken = token;
+    this.intentionalDisconnect = false;
+    this.reconnectAttempts = 0;
+
     this.room = new sdk.Room();
 
-    // Set up event handlers before connecting
     this.room.on('trackSubscribed', (track: any, publication: any, participant: any) => {
       this.handleTrackSubscribed(sdk, track, participant);
     });
@@ -65,26 +75,30 @@ export class LiveKitAgentService extends EventEmitter {
       console.log('[LiveKitAgent] Disconnected from room');
       this.connected = false;
       this.emit('disconnected');
+
+      // Auto-reconnect unless intentionally disconnected
+      if (!this.intentionalDisconnect) {
+        this.attemptReconnect();
+      }
     });
 
-    // Connect to the room
     await this.room.connect(url, token);
     this.connected = true;
 
-    // Create audio source for publishing bot audio
     this.audioSource = new sdk.AudioSource(LIVEKIT_SAMPLE_RATE, 1);
     this.localAudioTrack = sdk.LocalAudioTrack.createAudioTrack('bot-audio', this.audioSource);
 
-    // Publish our audio track
     await this.room.localParticipant.publishTrack(this.localAudioTrack);
 
     console.log('[LiveKitAgent] Joined room and published audio track');
   }
 
   /**
-   * Leave the LiveKit room
+   * Leave the LiveKit room intentionally
    */
   async leaveRoom(): Promise<void> {
+    this.intentionalDisconnect = true;
+
     if (this.room) {
       console.log('[LiveKitAgent] Leaving room...');
       await this.room.disconnect();
@@ -119,16 +133,13 @@ export class LiveKitAgentService extends EventEmitter {
     const sdk = await loadRtcNode();
     if (!sdk) return;
 
-    // Resample to LiveKit's expected rate
     let pcmData = audioData;
     if (sampleRate !== LIVEKIT_SAMPLE_RATE) {
       pcmData = resample(audioData, sampleRate, LIVEKIT_SAMPLE_RATE, 1);
     }
 
-    // Convert to Int16Array for LiveKit AudioFrame
     const samples = bufferToInt16Array(pcmData);
 
-    // Create AudioFrame and publish
     const frame = new sdk.AudioFrame(
       samples,
       LIVEKIT_SAMPLE_RATE,
@@ -139,16 +150,52 @@ export class LiveKitAgentService extends EventEmitter {
     await this.audioSource.captureFrame(frame);
   }
 
-  /**
-   * Check if connected to a LiveKit room
-   */
   isConnected(): boolean {
     return this.connected;
   }
 
   /**
-   * Handle a subscribed remote audio track
+   * Attempt to reconnect with exponential backoff
    */
+  private async attemptReconnect(): Promise<void> {
+    if (this.reconnecting || this.intentionalDisconnect) return;
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      console.error(`[LiveKitAgent] Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Giving up.`);
+      this.emit('reconnect.failed');
+      return;
+    }
+
+    this.reconnecting = true;
+    this.reconnectAttempts++;
+
+    const delay = INITIAL_RECONNECT_DELAY_MS * Math.pow(2, this.reconnectAttempts - 1);
+    console.log(`[LiveKitAgent] Reconnect attempt ${this.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms...`);
+
+    await new Promise(resolve => setTimeout(resolve, delay));
+
+    if (this.intentionalDisconnect) {
+      this.reconnecting = false;
+      return;
+    }
+
+    try {
+      // Clean up old room
+      this.room = null;
+      this.audioSource = null;
+      this.localAudioTrack = null;
+
+      await this.joinRoom(this.lastUrl, this.lastToken);
+      console.log('[LiveKitAgent] Reconnected successfully');
+      this.reconnectAttempts = 0;
+      this.emit('reconnected');
+    } catch (error: any) {
+      console.error(`[LiveKitAgent] Reconnect attempt ${this.reconnectAttempts} failed:`, error.message);
+      this.emit('reconnect.error', error);
+    }
+
+    this.reconnecting = false;
+  }
+
   private async handleTrackSubscribed(sdk: any, track: any, participant: any): Promise<void> {
     if (track.kind !== sdk.TrackKind.KIND_AUDIO) {
       return;
@@ -156,15 +203,12 @@ export class LiveKitAgentService extends EventEmitter {
 
     console.log(`[LiveKitAgent] Subscribed to audio track from ${participant.identity}`);
 
-    // Create AudioStream from the track (async iterable of AudioFrames)
     const stream = new sdk.AudioStream(track, LIVEKIT_SAMPLE_RATE, 1);
 
-    // Process audio frames from the stream
     try {
       for await (const audioFrame of stream) {
         if (!this.connected) break;
 
-        // Convert LiveKit AudioFrame (Int16Array @ 48kHz) to pipeline AudioFrame (Buffer @ 16kHz)
         const rawPcm = int16ArrayToBuffer(audioFrame.data);
         const resampled = resample(rawPcm, LIVEKIT_SAMPLE_RATE, PIPELINE_SAMPLE_RATE, 1);
 
