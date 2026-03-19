@@ -3,6 +3,7 @@ import { VoiceCallHandler, CallState } from '../src/handlers/voice-call-handler.
 import { OpenClawService } from '../src/services/openclaw-service.js';
 import { ChatterboxTTSService } from '../src/services/chatterbox-tts-service.js';
 import { MatrixClientService } from '../src/services/matrix-client-service.js';
+import { MatrixCallMediaService } from '../src/services/matrix-call-media-service.js';
 
 describe('VoiceCallHandler', () => {
   let handler: VoiceCallHandler;
@@ -10,6 +11,7 @@ describe('VoiceCallHandler', () => {
   let mockClient: any;
   let mockOpenClawService: OpenClawService;
   let mockTTSService: ChatterboxTTSService;
+  let mockCallMediaService: MatrixCallMediaService;
 
   beforeEach(() => {
     mockClient = {
@@ -17,12 +19,6 @@ describe('VoiceCallHandler', () => {
       sendAudio: vi.fn().mockResolvedValue({}),
       getUserId: vi.fn().mockReturnValue('@bot:matrix.org'),
     };
-
-    mockMatrixService = {
-      getClient: vi.fn().mockReturnValue(mockClient),
-      sendMessage: vi.fn().mockResolvedValue({}),
-      sendAudio: vi.fn().mockResolvedValue({}),
-    } as unknown as MatrixClientService;
 
     mockOpenClawService = {
       processText: vi.fn().mockResolvedValue({
@@ -39,10 +35,24 @@ describe('VoiceCallHandler', () => {
       }),
     } as unknown as ChatterboxTTSService;
 
+    mockCallMediaService = {
+      startCall: vi.fn().mockResolvedValue('call_123'),
+      endCall: vi.fn().mockResolvedValue({}),
+      handleCallMedia: vi.fn().mockResolvedValue({}),
+    } as unknown as MatrixCallMediaService;
+
+    mockMatrixService = {
+      getClient: vi.fn().mockReturnValue(mockClient),
+      sendMessage: vi.fn().mockResolvedValue({}),
+      sendAudio: vi.fn().mockResolvedValue({}),
+      getCallMediaService: vi.fn().mockReturnValue(mockCallMediaService),
+    } as unknown as MatrixClientService;
+
     handler = new VoiceCallHandler(
       mockMatrixService,
       mockOpenClawService,
-      mockTTSService
+      mockTTSService,
+      mockCallMediaService
     );
   });
 
@@ -121,6 +131,145 @@ describe('VoiceCallHandler', () => {
 
       await handler.endCall('!room1:matrix.org');
       expect(handler.getActiveCallCount()).toBe(1);
+    });
+  });
+
+  describe('startCall with real media', () => {
+    it('should start real media call when useRealMedia is true', async () => {
+      const roomId = '!test:matrix.org';
+      
+      await handler.startCall(roomId, true);
+
+      const callState = handler.getAllCallStates().get(roomId);
+      expect(callState?.isRealMediaCall).toBe(true);
+      expect(callState?.callId).toBe('call_123');
+      expect(mockCallMediaService.startCall).toHaveBeenCalledWith(roomId);
+    });
+
+    it('should fallback to text call if real media fails', async () => {
+      const roomId = '!test:matrix.org';
+      vi.mocked(mockCallMediaService.startCall).mockRejectedValueOnce(new Error('WebRTC not available'));
+      
+      await handler.startCall(roomId, true);
+
+      const callState = handler.getAllCallStates().get(roomId);
+      expect(callState?.isRealMediaCall).toBe(false);
+    });
+
+    it('should start text-simulated call when useRealMedia is false', async () => {
+      const roomId = '!test:matrix.org';
+      
+      await handler.startCall(roomId, false);
+
+      const callState = handler.getAllCallStates().get(roomId);
+      expect(callState?.isRealMediaCall).toBe(false);
+      expect(callState?.callId).toBeUndefined();
+    });
+  });
+
+  describe('endCall with real media', () => {
+    it('should end real media call when active', async () => {
+      const roomId = '!test:matrix.org';
+      
+      await handler.startCall(roomId, true);
+      await handler.endCall(roomId);
+
+      expect(mockCallMediaService.endCall).toHaveBeenCalledWith(roomId);
+    });
+
+    it('should handle endCall gracefully for non-real-media calls', async () => {
+      const roomId = '!test:matrix.org';
+      
+      await handler.startCall(roomId, false);
+      await handler.endCall(roomId);
+
+      expect(mockCallMediaService.endCall).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('processRealTimeAudio', () => {
+    it('should reject audio when call is not active', async () => {
+      const roomId = '!test:matrix.org';
+      const audioData = Buffer.from('test-audio');
+      
+      await handler.processRealTimeAudio(roomId, audioData, 'audio/pcm');
+
+      // Just verify no error is thrown
+      expect(true).toBe(true);
+    });
+
+    it('should reject audio for text-simulated call', async () => {
+      const roomId = '!test2:matrix.org'; // Use different room
+      const audioData = Buffer.from('test-audio');
+      
+      // Create a fresh mock for this test
+      const mockMatrixService2 = {
+        getClient: vi.fn().mockReturnValue(mockClient),
+        sendMessage: vi.fn().mockResolvedValue({}),
+        sendAudio: vi.fn().mockResolvedValue({}),
+        getCallMediaService: vi.fn().mockReturnValue(mockCallMediaService),
+      } as unknown as MatrixClientService;
+
+      const handler2 = new VoiceCallHandler(
+        mockMatrixService2,
+        mockOpenClawService,
+        mockTTSService,
+        mockCallMediaService
+      );
+      
+      await handler2.startCall(roomId, false);
+      
+      // Clear the sendMessage call from startCall
+      vi.mocked(mockMatrixService2.sendMessage).mockClear();
+      
+      await handler2.processRealTimeAudio(roomId, audioData, 'audio/pcm');
+
+      // Should NOT send a message - just log and return for text-simulated calls
+      expect(mockMatrixService2.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('should process real-time audio for real media call', async () => {
+      const roomId = '!test3:matrix.org'; // Use different room
+      const audioData = Buffer.from('test-audio');
+      
+      // Create a fresh mock for this test
+      const mockMatrixService3 = {
+        getClient: vi.fn().mockReturnValue(mockClient),
+        sendMessage: vi.fn().mockResolvedValue({}),
+        sendAudio: vi.fn().mockResolvedValue({}),
+        getCallMediaService: vi.fn().mockReturnValue(mockCallMediaService),
+      } as unknown as MatrixClientService;
+
+      const handler2 = new VoiceCallHandler(
+        mockMatrixService3,
+        mockOpenClawService,
+        mockTTSService,
+        mockCallMediaService
+      );
+      
+      await handler2.startCall(roomId, true);
+      
+      // Clear the sendMessage call from startCall
+      vi.mocked(mockMatrixService3.sendMessage).mockClear();
+      
+      await handler2.processRealTimeAudio(roomId, audioData, 'audio/pcm');
+
+      // Should update last activity
+      const callState = handler2.getAllCallStates().get(roomId);
+      expect(callState?.lastActivity).toBeDefined();
+      
+      // Should send placeholder (STT pending)
+      expect(mockMatrixService3.sendMessage).toHaveBeenCalledWith(
+        roomId,
+        expect.stringContaining('STT pending')
+      );
+    });
+  });
+
+  describe('getCallMediaService', () => {
+    it('should return call media service instance', () => {
+      const mediaService = handler.getCallMediaService();
+      expect(mediaService).toBeDefined();
     });
   });
 

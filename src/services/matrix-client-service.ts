@@ -3,10 +3,12 @@ import { config } from '../config/index.js';
 import { OpenClawService } from './openclaw-service.js';
 import { ChatterboxTTSService } from './chatterbox-tts-service.js';
 import { VoiceCallHandler } from '../handlers/voice-call-handler.js';
+import { MatrixCallMediaService } from './matrix-call-media-service.js';
 
 export class MatrixClientService {
   private client: MatrixClient;
   private voiceCallHandler: VoiceCallHandler;
+  private callMediaService: MatrixCallMediaService;
   private isRunning = false;
 
   constructor(
@@ -18,8 +20,12 @@ export class MatrixClientService {
   ) {
     const storage = new SimpleFsStorageProvider('./bot-storage.json');
     this.client = new MatrixClient(homeserver, accessToken, storage);
+    
+    // Create call media service first
+    this.callMediaService = new MatrixCallMediaService(this.client);
+    
     // Create handler after client is initialized
-    this.voiceCallHandler = new VoiceCallHandler(this, openClawService, ttsService);
+    this.voiceCallHandler = new VoiceCallHandler(this, openClawService, ttsService, this.callMediaService);
   }
 
   /**
@@ -34,6 +40,9 @@ export class MatrixClientService {
     // Set up event handlers
     this.setupEventHandlers();
 
+    // Start call media service (Phase 2)
+    await this.callMediaService.start();
+
     // Start syncing
     await this.client.start();
     this.isRunning = true;
@@ -47,6 +56,7 @@ export class MatrixClientService {
    */
   stop(): void {
     console.log('Stopping Matrix client...');
+    this.callMediaService.stop();
     this.client.stop();
     this.isRunning = false;
   }
@@ -63,6 +73,20 @@ export class MatrixClientService {
    */
   getClient(): MatrixClient {
     return this.client;
+  }
+
+  /**
+   * Get the call media service (Phase 2)
+   */
+  getCallMediaService(): MatrixCallMediaService {
+    return this.callMediaService;
+  }
+
+  /**
+   * Get the voice call handler
+   */
+  getVoiceCallHandler(): VoiceCallHandler {
+    return this.voiceCallHandler;
   }
 
   /**
