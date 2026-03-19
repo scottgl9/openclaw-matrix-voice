@@ -23,6 +23,11 @@ export interface Config {
     apiKey: string;
     apiSecret: string;
   };
+  whisper: {
+    url: string;
+    model?: string;
+    language?: string;
+  };
   server: {
     port: number;
     host: string;
@@ -54,6 +59,11 @@ export const config: Config = {
     apiKey: process.env.LIVEKIT_API_KEY || '',
     apiSecret: process.env.LIVEKIT_API_SECRET || '',
   },
+  whisper: {
+    url: process.env.WHISPER_URL || '',
+    model: process.env.WHISPER_MODEL || 'whisper-1',
+    language: process.env.WHISPER_LANGUAGE || 'en',
+  },
   server: {
     port: parseInt(process.env.SERVER_PORT || '3000', 10),
     host: process.env.SERVER_HOST || '0.0.0.0',
@@ -76,7 +86,7 @@ export function validateConfig(): void {
   if (!config.openclaw.apiToken) {
     errors.push('OPENCLAW_API_TOKEN is required');
   }
-  
+
   // Validate LiveKit config if enabled
   if (config.livekit.enabled) {
     if (!config.livekit.url) {

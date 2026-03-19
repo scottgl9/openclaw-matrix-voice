@@ -2,23 +2,24 @@ import { MatrixClient } from 'matrix-bot-sdk';
 import { OpenClawService } from '../services/openclaw-service.js';
 import { ChatterboxTTSService } from '../services/chatterbox-tts-service.js';
 import { MatrixClientService } from '../services/matrix-client-service.js';
-import { MatrixCallMediaService } from '../services/matrix-call-media-service.js';
 import { AudioPipelineService } from '../services/audio-pipeline.js';
 import { TurnProcessorService } from '../services/turn-processor.js';
 import { VadService } from '../services/vad-service.js';
+import { LiveKitAgentService } from '../services/livekit-agent-service.js';
+import { LiveKitAudioIngress, LiveKitAudioEgress } from '../services/livekit-audio-transport.js';
 
 export interface CallState {
   isActive: boolean;
   roomId: string;
   lastActivity: Date;
   transcription?: string;
-  // Phase 2: Real call media support
-  callId?: string;
-  isRealMediaCall?: boolean;
   // Phase 5: VAD and turn processing
   audioPipeline?: AudioPipelineService;
   turnProcessor?: TurnProcessorService;
   vadService?: VadService;
+  // LiveKit agent for real media calls
+  livekitAgent?: LiveKitAgentService;
+  isLiveKitCall?: boolean;
 }
 
 export class VoiceCallHandler {
@@ -26,24 +27,20 @@ export class VoiceCallHandler {
   private client: MatrixClient;
   private openClawService: OpenClawService;
   private ttsService: ChatterboxTTSService;
-  private callMediaService: MatrixCallMediaService;
   private activeCalls: Map<string, CallState> = new Map();
-  
+
   // Phase 5: Turn processor for end-to-end processing
   private turnProcessor: TurnProcessorService | null = null;
 
   constructor(
     matrixService: MatrixClientService,
     openClawService: OpenClawService,
-    ttsService: ChatterboxTTSService,
-    callMediaService?: MatrixCallMediaService
+    ttsService: ChatterboxTTSService
   ) {
     this.matrixService = matrixService;
     this.client = matrixService.getClient();
     this.openClawService = openClawService;
     this.ttsService = ttsService;
-    // Use provided call media service or create a new one
-    this.callMediaService = callMediaService || new MatrixCallMediaService(this.client);
   }
 
   /**
@@ -78,20 +75,20 @@ export class VoiceCallHandler {
   async handleReply(roomId: string, event: any): Promise<void> {
     const content = event['content'] || {};
     const replyTo = content['m.reply_to'] || content['reply_to'];
-    
+
     if (!replyTo) {
       return;
     }
 
     console.log(`Received reply in ${roomId}`);
-    
+
     // Process as voice call if in active call room
     const callState = this.activeCalls.get(roomId);
     if (!callState || !callState.isActive) {
-      await this.matrixService.sendMessage(roomId, '⚠️ Voice call is not active. Use /call start to begin.');
+      await this.matrixService.sendMessage(roomId, 'Voice call is not active. Use /call start to begin.');
       return;
     }
-    
+
     await this.processVoiceInput(roomId, event);
   }
 
@@ -100,30 +97,24 @@ export class VoiceCallHandler {
    */
   async handleEvent(roomId: string, event: any): Promise<void> {
     const type = event['type'];
-    
-    // Phase 2: Handle real media call events
-    const callState = this.activeCalls.get(roomId);
-    if (callState?.isRealMediaCall) {
-      // Route call media events to call media service
-      if (type === 'm.call.media') {
-        await this.callMediaService.handleCallMedia(roomId, event);
-        return;
-      }
+
+    // Handle MatrixRTC m.call.member state events
+    if (type === 'm.call.member') {
+      await this.handleMatrixRTCEvent(roomId, event);
+      return;
     }
-    
+
     // Handle call control events
     if (type === 'm.room.message') {
       const content = event['content'] || {};
-      const msgtype = content['msgtype'];
-      
+
       // Check for voice call commands
       if (content['body']) {
         const body = content['body'].toLowerCase();
-        
+
         if (body.includes('/call start') || body.includes('/voice start')) {
-          // Phase 2: Support /call start real flag for WebRTC calls
-          const useRealMedia = body.includes('real') || body.includes('webrtc');
-          await this.startCall(roomId, useRealMedia);
+          const useLiveKit = body.includes('livekit') || body.includes('real');
+          await this.startCall(roomId, useLiveKit);
         } else if (body.includes('/call end') || body.includes('/voice end')) {
           await this.endCall(roomId);
         } else if (body.includes('/call status') || body.includes('/voice status')) {
@@ -134,81 +125,135 @@ export class VoiceCallHandler {
   }
 
   /**
-   * Start a voice call in a room
-   * Phase 2/3/5: Support text-simulated, WebRTC, LiveKit, and VAD-driven calls
+   * Handle MatrixRTC m.call.member state events
+   * When a user starts a voice call in Element, it sends m.call.member with foci_active pointing to LiveKit
    */
-  async startCall(roomId: string, useRealMedia = false): Promise<void> {
-    console.log(`Starting voice call in ${roomId} (real media: ${useRealMedia})`);
-    
+  async handleMatrixRTCEvent(roomId: string, event: any): Promise<void> {
+    const content = event['content'] || {};
+    const memberships = content['memberships'] || [];
+
+    // Check if there are active memberships with LiveKit focus
+    for (const membership of memberships) {
+      const fociActive = membership['foci_active'] || [];
+      for (const focus of fociActive) {
+        if (focus['type'] === 'livekit') {
+          const livekitUrl = focus['livekit_service_url'];
+          const livekitAlias = focus['livekit_alias'] || roomId;
+
+          console.log(`[VoiceCallHandler] MatrixRTC LiveKit call detected in ${roomId}`);
+          console.log(`[VoiceCallHandler] LiveKit URL: ${livekitUrl}, alias: ${livekitAlias}`);
+
+          // Check if we're already in this call
+          const existing = this.activeCalls.get(roomId);
+          if (existing?.isActive && existing?.isLiveKitCall) {
+            console.log('[VoiceCallHandler] Already in this LiveKit call, skipping');
+            return;
+          }
+
+          // Auto-join the call
+          await this.startLiveKitCall(roomId, livekitUrl, livekitAlias);
+          return;
+        }
+      }
+    }
+
+    // No active LiveKit focus - call may have ended
+    const existing = this.activeCalls.get(roomId);
+    if (existing?.isActive && existing?.isLiveKitCall) {
+      console.log('[VoiceCallHandler] MatrixRTC call ended, cleaning up');
+      await this.endCall(roomId);
+    }
+  }
+
+  /**
+   * Start a LiveKit call by joining an existing room
+   */
+  private async startLiveKitCall(roomId: string, livekitUrl: string, livekitAlias: string): Promise<void> {
+    const liveKitService = this.matrixService.getLiveKitService();
+    if (!liveKitService) {
+      console.warn('[VoiceCallHandler] LiveKit service not available');
+      return;
+    }
+
+    try {
+      // Generate a token for the bot to join
+      const botUserId = await this.client.getUserId();
+      const token = await liveKitService.generateToken(livekitAlias, botUserId, true, true);
+
+      // Create agent service and join
+      const agent = new LiveKitAgentService(liveKitService);
+      await agent.joinRoom(livekitUrl, token);
+
+      const callState: CallState = {
+        isActive: true,
+        roomId,
+        lastActivity: new Date(),
+        isLiveKitCall: true,
+        livekitAgent: agent,
+      };
+
+      // Initialize audio pipeline with LiveKit transport
+      await this.initializeAudioPipeline(roomId, callState);
+
+      this.activeCalls.set(roomId, callState);
+      console.log(`[VoiceCallHandler] Joined LiveKit call in ${roomId}`);
+    } catch (error: any) {
+      console.error('[VoiceCallHandler] Error joining LiveKit call:', error.message);
+    }
+  }
+
+  /**
+   * Start a voice call in a room
+   */
+  async startCall(roomId: string, useLiveKit = false): Promise<void> {
+    console.log(`Starting voice call in ${roomId} (livekit: ${useLiveKit})`);
+
     const callState: CallState = {
       isActive: true,
       roomId,
       lastActivity: new Date(),
-      isRealMediaCall: useRealMedia,
+      isLiveKitCall: false,
     };
 
-    if (useRealMedia) {
-      // Phase 5: Initialize VAD-driven audio pipeline
-      try {
-        await this.initializeAudioPipeline(roomId, callState);
-      } catch (error: any) {
-        console.error('[VoiceCallHandler] Error initializing audio pipeline:', error.message);
-        // Continue without pipeline - will fall back to text mode
-        callState.isRealMediaCall = false;
-      }
+    if (useLiveKit) {
+      const liveKitService = this.matrixService.getLiveKitService();
 
-      // Phase 3: Try LiveKit first, fall back to WebRTC/Matrix call
-      const liveKitAdapter = this.matrixService.getLiveKitAdapter();
-      
-      if (liveKitAdapter && liveKitAdapter.isLiveKitAvailable()) {
+      if (liveKitService) {
         try {
-          // Use LiveKit for real media call
-          const userId = await this.matrixService.getClient().getUserId();
-          const result = await liveKitAdapter.startCall(roomId, userId);
-          
-          if (result.success) {
-            callState.callId = `livekit_${Date.now()}`;
-            console.log(`[VoiceCallHandler] LiveKit call started in ${roomId}`);
-          } else {
-            console.warn('[VoiceCallHandler] LiveKit start failed:', result.error);
-            // Fall through to Matrix call fallback
-          }
+          // Create a LiveKit room and join it
+          const room = await liveKitService.createRoom(roomId);
+          const botUserId = await this.client.getUserId();
+          const token = await liveKitService.generateToken(room.name, botUserId, true, true);
+
+          const agent = new LiveKitAgentService(liveKitService);
+          await agent.joinRoom(liveKitService.getUrl(), token);
+
+          callState.isLiveKitCall = true;
+          callState.livekitAgent = agent;
+
+          // Initialize audio pipeline with LiveKit transport
+          await this.initializeAudioPipeline(roomId, callState);
+
+          console.log(`[VoiceCallHandler] LiveKit call started in ${roomId}`);
         } catch (error: any) {
           console.error('[VoiceCallHandler] Error starting LiveKit call:', error.message);
-          // Fall through to Matrix call fallback
-        }
-      }
-
-      // Fallback: Use call media service for WebRTC-based calls
-      if (!callState.callId) {
-        try {
-          const callId = await this.callMediaService.startCall(roomId);
-          callState.callId = callId;
-          console.log(`[VoiceCallHandler] Matrix call started: ${callId}`);
-        } catch (error) {
-          console.error('[VoiceCallHandler] Error starting real media call:', error);
-          // Fallback to text-simulated call
-          callState.isRealMediaCall = false;
+          callState.isLiveKitCall = false;
         }
       }
     }
 
     this.activeCalls.set(roomId, callState);
 
-    let message = '🎤 Voice call started. Speak clearly and I\'ll respond.';
-    if (useRealMedia) {
-      if (callState.callId?.startsWith('livekit_')) {
-        message = '🎤 LiveKit voice call started (VAD-driven). I\'m listening...';
-      } else {
-        message = '🎤 Real voice call started (Matrix/WebRTC). I\'m listening...';
-      }
+    let message = 'Voice call started. Send messages and I\'ll respond.';
+    if (callState.isLiveKitCall) {
+      message = 'LiveKit voice call started (VAD-driven). I\'m listening...';
     }
-    
+
     await this.matrixService.sendMessage(roomId, message);
   }
 
   /**
-   * Initialize audio pipeline with VAD and turn processor (Phase 5)
+   * Initialize audio pipeline with VAD and turn processor
    */
   private async initializeAudioPipeline(roomId: string, callState: CallState): Promise<void> {
     console.log('[VoiceCallHandler] Initializing audio pipeline for', roomId);
@@ -242,6 +287,15 @@ export class VoiceCallHandler {
 
     // Initialize pipeline
     await pipeline.initialize();
+
+    // If we have a LiveKit agent, set up LiveKit transport
+    if (callState.livekitAgent) {
+      const ingress = new LiveKitAudioIngress(callState.livekitAgent);
+      const egress = new LiveKitAudioEgress(callState.livekitAgent);
+      pipeline.setIngress(ingress);
+      pipeline.setEgress(egress);
+    }
+
     await pipeline.start();
 
     // Attach VAD to pipeline
@@ -251,7 +305,7 @@ export class VoiceCallHandler {
     // Set up turn completion handler
     if (turnProcessor) {
       await turnProcessor.initialize();
-      
+
       pipeline.on('turn.complete', async (event: any) => {
         console.log('[VoiceCallHandler] Turn complete event, processing...');
         await turnProcessor!.handleTurnCompletion(event);
@@ -259,20 +313,25 @@ export class VoiceCallHandler {
 
       // Set up TTS audio handler
       turnProcessor.on('tts.audio', async (event: any) => {
-        console.log('[VoiceCallHandler] TTS audio ready, sending to room...');
+        console.log('[VoiceCallHandler] TTS audio ready');
         try {
-          await this.matrixService.sendAudio(roomId, event.audioData, event.mimeType);
+          if (callState.livekitAgent && callState.livekitAgent.isConnected()) {
+            // Send TTS audio through LiveKit for real-time playback
+            await callState.livekitAgent.publishAudioBuffer(event.audioData, 16000);
+          } else {
+            // Fallback: send as Matrix audio message
+            await this.matrixService.sendAudio(roomId, event.audioData, event.mimeType);
+          }
         } catch (error: any) {
           console.error('[VoiceCallHandler] Error sending TTS audio:', error.message);
-          // Fallback to text
-          await this.matrixService.sendMessage(roomId, `🤖 [TTS error: ${event.responseText}]`);
+          await this.matrixService.sendMessage(roomId, `[TTS error: ${event.responseText}]`);
         }
       });
 
       // Set up error handler
       turnProcessor.on('error', async (event: any) => {
         console.error('[VoiceCallHandler] Turn processing error:', event.error);
-        await this.matrixService.sendMessage(roomId, `❌ Processing error: ${event.error}`);
+        await this.matrixService.sendMessage(roomId, `Processing error: ${event.error}`);
       });
     }
 
@@ -288,12 +347,12 @@ export class VoiceCallHandler {
    */
   async endCall(roomId: string): Promise<void> {
     console.log(`Ending voice call in ${roomId}`);
-    
+
     const callState = this.activeCalls.get(roomId);
     if (callState) {
       callState.isActive = false;
-      
-      // Phase 5: Stop audio pipeline, VAD, and turn processor
+
+      // Stop audio pipeline, VAD, and turn processor
       if (callState.audioPipeline) {
         try {
           await callState.audioPipeline.stop();
@@ -301,11 +360,11 @@ export class VoiceCallHandler {
           console.error('[VoiceCallHandler] Error stopping audio pipeline:', error);
         }
       }
-      
+
       if (callState.vadService) {
         callState.vadService.stop();
       }
-      
+
       if (callState.turnProcessor) {
         try {
           await callState.turnProcessor.shutdown();
@@ -314,31 +373,19 @@ export class VoiceCallHandler {
         }
       }
 
-      // Phase 3: End LiveKit call if active
-      if (callState.isRealMediaCall && callState.callId?.startsWith('livekit_')) {
-        const liveKitAdapter = this.matrixService.getLiveKitAdapter();
-        if (liveKitAdapter) {
-          try {
-            await liveKitAdapter.endCall(roomId);
-          } catch (error) {
-            console.error('[VoiceCallHandler] Error ending LiveKit call:', error);
-          }
-        }
-      }
-      
-      // Phase 2: End Matrix/WebRTC call if active
-      if (callState.isRealMediaCall && !callState.callId?.startsWith('livekit_')) {
+      // Leave LiveKit room if connected
+      if (callState.livekitAgent) {
         try {
-          await this.callMediaService.endCall(roomId);
+          await callState.livekitAgent.leaveRoom();
         } catch (error) {
-          console.error('[VoiceCallHandler] Error ending real media call:', error);
+          console.error('[VoiceCallHandler] Error leaving LiveKit room:', error);
         }
       }
-      
+
       this.activeCalls.set(roomId, callState);
     }
 
-    await this.matrixService.sendMessage(roomId, '🔇 Voice call ended.');
+    await this.matrixService.sendMessage(roomId, 'Voice call ended.');
   }
 
   /**
@@ -347,11 +394,12 @@ export class VoiceCallHandler {
   async sendStatus(roomId: string): Promise<void> {
     const callState = this.activeCalls.get(roomId);
     const status = callState?.isActive ? 'Active' : 'Inactive';
-    const duration = callState?.lastActivity 
-      ? `${Math.floor((Date.now() - callState.lastActivity.getTime()) / 1000)}s` 
+    const mode = callState?.isLiveKitCall ? ' (LiveKit)' : '';
+    const duration = callState?.lastActivity
+      ? `${Math.floor((Date.now() - callState.lastActivity.getTime()) / 1000)}s`
       : 'N/A';
 
-    await this.matrixService.sendMessage(roomId, `📞 Call status: ${status}\nDuration: ${duration}`);
+    await this.matrixService.sendMessage(roomId, `Call status: ${status}${mode}\nDuration: ${duration}`);
   }
 
   /**
@@ -359,9 +407,7 @@ export class VoiceCallHandler {
    */
   private async handleVoiceCallReference(roomId: string, eventId: string, event: any): Promise<void> {
     console.log(`Handling voice call reference: ${eventId}`);
-    
-    // For MVP, we'll process text-based voice simulation
-    // In a full implementation, this would handle actual audio streams
+
     const content = event['content'] || {};
     const body = content['body'] || '';
 
@@ -377,7 +423,7 @@ export class VoiceCallHandler {
   private async processVoiceInput(roomId: string, event: any): Promise<void> {
     const callState = this.activeCalls.get(roomId);
     if (!callState || !callState.isActive) {
-      await this.matrixService.sendMessage(roomId, '⚠️ Voice call is not active. Use /call start to begin.');
+      await this.matrixService.sendMessage(roomId, 'Voice call is not active. Use /call start to begin.');
       return;
     }
 
@@ -396,26 +442,24 @@ export class VoiceCallHandler {
 
     // Get response from OpenClaw
     const response = await this.openClawService.processText(body);
-    
+
     if (response.success && response.response) {
       // Convert response to speech
       const ttsResult = await this.ttsService.textToSpeechCached(response.response);
-      
+
       if (ttsResult.success && ttsResult.audioData) {
         // Send audio back to room
         try {
           await this.matrixService.sendAudio(roomId, ttsResult.audioData, ttsResult.mimeType || 'audio/wav');
         } catch (error) {
           console.error('Error sending audio:', error);
-          // Fallback to text
-          await this.matrixService.sendMessage(roomId, `🤖 ${response.response}`);
+          await this.matrixService.sendMessage(roomId, response.response);
         }
       } else {
-        // Fallback to text
-        await this.matrixService.sendMessage(roomId, `🤖 ${response.response}`);
+        await this.matrixService.sendMessage(roomId, response.response);
       }
     } else {
-      await this.matrixService.sendMessage(roomId, `❌ Error: ${response.error || 'Unknown error'}`);
+      await this.matrixService.sendMessage(roomId, `Error: ${response.error || 'Unknown error'}`);
     }
   }
 
@@ -431,49 +475,5 @@ export class VoiceCallHandler {
    */
   getAllCallStates(): Map<string, CallState> {
     return new Map(this.activeCalls);
-  }
-
-  /**
-   * Process real-time audio input (Phase 2: stub for STT integration)
-   * This method will be called when real audio streams are received
-   */
-  async processRealTimeAudio(roomId: string, audioData: Buffer, mimeType: string): Promise<void> {
-    const callState = this.activeCalls.get(roomId);
-    if (!callState || !callState.isActive) {
-      console.warn('[VoiceCallHandler] No active call for audio processing in', roomId);
-      return;
-    }
-
-    if (!callState.isRealMediaCall) {
-      console.warn('[VoiceCallHandler] Real-time audio received but call is text-simulated');
-      return;
-    }
-
-    console.log(`[VoiceCallHandler] Processing real-time audio: ${audioData.length} bytes`);
-
-    // Update last activity
-    callState.lastActivity = new Date();
-    this.activeCalls.set(roomId, callState);
-
-    // Phase 2: Stub - In production, this would:
-    // 1. Pass audio to STT service (Whisper/Vosk)
-    // 2. Get transcription
-    // 3. Process transcription through OpenClaw
-    // 4. Convert response to speech via TTS
-    // 5. Send audio back via WebRTC
-    
-    // For now, just log and send a placeholder response
-    console.log('[VoiceCallHandler] STT integration pending - audio received but not transcribed');
-    
-    // Send acknowledgment (Phase 2: text placeholder)
-    // Phase 3+: Send actual audio response via WebRTC
-    await this.matrixService.sendMessage(roomId, '🎙️ [Real audio received - STT pending]');
-  }
-
-  /**
-   * Get call media service instance
-   */
-  getCallMediaService(): MatrixCallMediaService {
-    return this.callMediaService;
   }
 }

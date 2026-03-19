@@ -3,7 +3,6 @@ import { VoiceCallHandler, CallState } from '../src/handlers/voice-call-handler.
 import { OpenClawService } from '../src/services/openclaw-service.js';
 import { ChatterboxTTSService } from '../src/services/chatterbox-tts-service.js';
 import { MatrixClientService } from '../src/services/matrix-client-service.js';
-import { MatrixCallMediaService } from '../src/services/matrix-call-media-service.js';
 
 describe('VoiceCallHandler', () => {
   let handler: VoiceCallHandler;
@@ -11,7 +10,6 @@ describe('VoiceCallHandler', () => {
   let mockClient: any;
   let mockOpenClawService: OpenClawService;
   let mockTTSService: ChatterboxTTSService;
-  let mockCallMediaService: MatrixCallMediaService;
 
   beforeEach(() => {
     mockClient = {
@@ -35,32 +33,24 @@ describe('VoiceCallHandler', () => {
       }),
     } as unknown as ChatterboxTTSService;
 
-    mockCallMediaService = {
-      startCall: vi.fn().mockResolvedValue('call_123'),
-      endCall: vi.fn().mockResolvedValue({}),
-      handleCallMedia: vi.fn().mockResolvedValue({}),
-    } as unknown as MatrixCallMediaService;
-
     mockMatrixService = {
       getClient: vi.fn().mockReturnValue(mockClient),
       sendMessage: vi.fn().mockResolvedValue({}),
       sendAudio: vi.fn().mockResolvedValue({}),
-      getCallMediaService: vi.fn().mockReturnValue(mockCallMediaService),
-      getLiveKitAdapter: vi.fn().mockReturnValue(null), // No LiveKit adapter in tests
+      getLiveKitService: vi.fn().mockReturnValue(null),
     } as unknown as MatrixClientService;
 
     handler = new VoiceCallHandler(
       mockMatrixService,
       mockOpenClawService,
-      mockTTSService,
-      mockCallMediaService
+      mockTTSService
     );
   });
 
   describe('startCall', () => {
     it('should start a call in a room', async () => {
       const roomId = '!test:matrix.org';
-      
+
       await handler.startCall(roomId);
 
       const callState = handler.getAllCallStates().get(roomId);
@@ -71,12 +61,31 @@ describe('VoiceCallHandler', () => {
         expect.stringContaining('Voice call started')
       );
     });
+
+    it('should start text-simulated call when useLiveKit is false', async () => {
+      const roomId = '!test:matrix.org';
+
+      await handler.startCall(roomId, false);
+
+      const callState = handler.getAllCallStates().get(roomId);
+      expect(callState?.isLiveKitCall).toBe(false);
+    });
+
+    it('should not start LiveKit call when LiveKit service is unavailable', async () => {
+      const roomId = '!test:matrix.org';
+
+      await handler.startCall(roomId, true);
+
+      const callState = handler.getAllCallStates().get(roomId);
+      // Falls back to non-LiveKit since service returns null
+      expect(callState?.isLiveKitCall).toBe(false);
+    });
   });
 
   describe('endCall', () => {
     it('should end an active call', async () => {
       const roomId = '!test:matrix.org';
-      
+
       await handler.startCall(roomId);
       await handler.endCall(roomId);
 
@@ -97,7 +106,7 @@ describe('VoiceCallHandler', () => {
   describe('sendStatus', () => {
     it('should return inactive status when no call', async () => {
       await handler.sendStatus('!test:matrix.org');
-      
+
       expect(mockMatrixService.sendMessage).toHaveBeenCalledWith(
         '!test:matrix.org',
         expect.stringContaining('Inactive')
@@ -107,11 +116,10 @@ describe('VoiceCallHandler', () => {
     it('should return active status with duration', async () => {
       const roomId = '!test:matrix.org';
       await handler.startCall(roomId);
-      
-      // Wait a bit for duration to be non-zero
+
       await new Promise(resolve => setTimeout(resolve, 10));
       await handler.sendStatus(roomId);
-      
+
       expect(mockMatrixService.sendMessage).toHaveBeenCalledWith(
         roomId,
         expect.stringContaining('Active')
@@ -127,7 +135,7 @@ describe('VoiceCallHandler', () => {
     it('should return correct count of active calls', async () => {
       await handler.startCall('!room1:matrix.org');
       await handler.startCall('!room2:matrix.org');
-      
+
       expect(handler.getActiveCallCount()).toBe(2);
 
       await handler.endCall('!room1:matrix.org');
@@ -135,144 +143,48 @@ describe('VoiceCallHandler', () => {
     });
   });
 
-  describe('startCall with real media', () => {
-    it('should start real media call when useRealMedia is true', async () => {
+  describe('handleEvent', () => {
+    it('should start call on /call start command', async () => {
       const roomId = '!test:matrix.org';
-      
-      await handler.startCall(roomId, true);
+      await handler.handleEvent(roomId, {
+        type: 'm.room.message',
+        content: { body: '/call start' },
+      });
+
+      expect(handler.getActiveCallCount()).toBe(1);
+    });
+
+    it('should end call on /call end command', async () => {
+      const roomId = '!test:matrix.org';
+      await handler.startCall(roomId);
+      await handler.handleEvent(roomId, {
+        type: 'm.room.message',
+        content: { body: '/call end' },
+      });
 
       const callState = handler.getAllCallStates().get(roomId);
-      expect(callState?.isRealMediaCall).toBe(true);
-      expect(callState?.callId).toBe('call_123');
-      expect(mockCallMediaService.startCall).toHaveBeenCalledWith(roomId);
+      expect(callState?.isActive).toBe(false);
     });
 
-    it('should fallback to text call if real media fails', async () => {
+    it('should handle MatrixRTC m.call.member events', async () => {
       const roomId = '!test:matrix.org';
-      vi.mocked(mockCallMediaService.startCall).mockRejectedValueOnce(new Error('WebRTC not available'));
-      
-      await handler.startCall(roomId, true);
 
-      const callState = handler.getAllCallStates().get(roomId);
-      expect(callState?.isRealMediaCall).toBe(false);
-    });
+      // No LiveKit service - should log warning but not crash
+      await handler.handleEvent(roomId, {
+        type: 'm.call.member',
+        content: {
+          memberships: [{
+            foci_active: [{
+              type: 'livekit',
+              livekit_service_url: 'wss://livekit.example.com',
+              livekit_alias: 'room-123',
+            }],
+          }],
+        },
+      });
 
-    it('should start text-simulated call when useRealMedia is false', async () => {
-      const roomId = '!test:matrix.org';
-      
-      await handler.startCall(roomId, false);
-
-      const callState = handler.getAllCallStates().get(roomId);
-      expect(callState?.isRealMediaCall).toBe(false);
-      expect(callState?.callId).toBeUndefined();
-    });
-  });
-
-  describe('endCall with real media', () => {
-    it('should end real media call when active', async () => {
-      const roomId = '!test:matrix.org';
-      
-      await handler.startCall(roomId, true);
-      await handler.endCall(roomId);
-
-      expect(mockCallMediaService.endCall).toHaveBeenCalledWith(roomId);
-    });
-
-    it('should handle endCall gracefully for non-real-media calls', async () => {
-      const roomId = '!test:matrix.org';
-      
-      await handler.startCall(roomId, false);
-      await handler.endCall(roomId);
-
-      expect(mockCallMediaService.endCall).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('processRealTimeAudio', () => {
-    it('should reject audio when call is not active', async () => {
-      const roomId = '!test:matrix.org';
-      const audioData = Buffer.from('test-audio');
-      
-      await handler.processRealTimeAudio(roomId, audioData, 'audio/pcm');
-
-      // Just verify no error is thrown
-      expect(true).toBe(true);
-    });
-
-    it('should reject audio for text-simulated call', async () => {
-      const roomId = '!test2:matrix.org'; // Use different room
-      const audioData = Buffer.from('test-audio');
-      
-      // Create a fresh mock for this test
-      const mockMatrixService2 = {
-        getClient: vi.fn().mockReturnValue(mockClient),
-        sendMessage: vi.fn().mockResolvedValue({}),
-        sendAudio: vi.fn().mockResolvedValue({}),
-        getCallMediaService: vi.fn().mockReturnValue(mockCallMediaService),
-        getLiveKitAdapter: vi.fn().mockReturnValue(null),
-      } as unknown as MatrixClientService;
-
-      const handler2 = new VoiceCallHandler(
-        mockMatrixService2,
-        mockOpenClawService,
-        mockTTSService,
-        mockCallMediaService
-      );
-      
-      await handler2.startCall(roomId, false);
-      
-      // Clear the sendMessage call from startCall
-      vi.mocked(mockMatrixService2.sendMessage).mockClear();
-      
-      await handler2.processRealTimeAudio(roomId, audioData, 'audio/pcm');
-
-      // Should NOT send a message - just log and return for text-simulated calls
-      expect(mockMatrixService2.sendMessage).not.toHaveBeenCalled();
-    });
-
-    it('should process real-time audio for real media call', async () => {
-      const roomId = '!test3:matrix.org'; // Use different room
-      const audioData = Buffer.from('test-audio');
-      
-      // Create a fresh mock for this test
-      const mockMatrixService3 = {
-        getClient: vi.fn().mockReturnValue(mockClient),
-        sendMessage: vi.fn().mockResolvedValue({}),
-        sendAudio: vi.fn().mockResolvedValue({}),
-        getCallMediaService: vi.fn().mockReturnValue(mockCallMediaService),
-        getLiveKitAdapter: vi.fn().mockReturnValue(null),
-      } as unknown as MatrixClientService;
-
-      const handler2 = new VoiceCallHandler(
-        mockMatrixService3,
-        mockOpenClawService,
-        mockTTSService,
-        mockCallMediaService
-      );
-      
-      await handler2.startCall(roomId, true);
-      
-      // Clear the sendMessage call from startCall
-      vi.mocked(mockMatrixService3.sendMessage).mockClear();
-      
-      await handler2.processRealTimeAudio(roomId, audioData, 'audio/pcm');
-
-      // Should update last activity
-      const callState = handler2.getAllCallStates().get(roomId);
-      expect(callState?.lastActivity).toBeDefined();
-      
-      // Should send placeholder (STT pending)
-      expect(mockMatrixService3.sendMessage).toHaveBeenCalledWith(
-        roomId,
-        expect.stringContaining('STT pending')
-      );
-    });
-  });
-
-  describe('getCallMediaService', () => {
-    it('should return call media service instance', () => {
-      const mediaService = handler.getCallMediaService();
-      expect(mediaService).toBeDefined();
+      // Should not crash, just log warning since no LiveKit service
+      expect(handler.getActiveCallCount()).toBe(0);
     });
   });
 

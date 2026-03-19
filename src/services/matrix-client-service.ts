@@ -3,18 +3,14 @@ import { config } from '../config/index.js';
 import { OpenClawService } from './openclaw-service.js';
 import { ChatterboxTTSService } from './chatterbox-tts-service.js';
 import { VoiceCallHandler } from '../handlers/voice-call-handler.js';
-import { MatrixCallMediaService } from './matrix-call-media-service.js';
 import { LiveKitService } from './livekit-service.js';
-import { MatrixLiveKitAdapter } from './matrix-livekit-adapter.js';
 import { AudioPipelineService } from './audio-pipeline.js';
 
 export class MatrixClientService {
   private client: MatrixClient;
   private voiceCallHandler: VoiceCallHandler;
-  private callMediaService: MatrixCallMediaService;
   private audioPipeline: AudioPipelineService | null;
   private liveKitService: LiveKitService | null;
-  private liveKitAdapter: MatrixLiveKitAdapter | null;
   private isRunning = false;
 
   constructor(
@@ -26,7 +22,7 @@ export class MatrixClientService {
   ) {
     const storage = new SimpleFsStorageProvider('./bot-storage.json');
     this.client = new MatrixClient(homeserver, accessToken, storage);
-    
+
     // Initialize audio pipeline (Phase 4)
     this.audioPipeline = new AudioPipelineService({
       sampleRate: config.audio.sampleRate,
@@ -35,30 +31,20 @@ export class MatrixClientService {
       frameDurationMs: 20,
       loopbackEnabled: true,
     });
-    
-    // Create call media service first
-    this.callMediaService = new MatrixCallMediaService(this.client, this.audioPipeline);
-    
-    // Initialize LiveKit services if enabled
+
+    // Initialize LiveKit service if enabled
     this.liveKitService = null;
-    this.liveKitAdapter = null;
-    
+
     if (config.livekit.enabled) {
       this.liveKitService = new LiveKitService({
         url: config.livekit.url,
         apiKey: config.livekit.apiKey,
         apiSecret: config.livekit.apiSecret,
       });
-      
-      this.liveKitAdapter = new MatrixLiveKitAdapter(this.client, {
-        liveKitEnabled: true,
-        liveKitService: this.liveKitService,
-        fallbackToText: true, // Always allow fallback to text-simulated calls
-      });
     }
-    
+
     // Create handler after client is initialized
-    this.voiceCallHandler = new VoiceCallHandler(this, openClawService, ttsService, this.callMediaService);
+    this.voiceCallHandler = new VoiceCallHandler(this, openClawService, ttsService);
   }
 
   /**
@@ -66,11 +52,9 @@ export class MatrixClientService {
    */
   async start(): Promise<void> {
     console.log('Starting Matrix client...');
-    
+
     // Enable auto-join for invited rooms
     AutojoinRoomsMixin.setupOnClient(this.client);
-
-    // Set up event handlers
 
     // Initialize audio pipeline (Phase 4)
     if (this.audioPipeline) {
@@ -80,14 +64,10 @@ export class MatrixClientService {
     }
     this.setupEventHandlers();
 
-    // Start call media service (Phase 2)
-    await this.callMediaService.start();
-
-    // Start LiveKit service if enabled (Phase 3)
-    if (this.liveKitService && this.liveKitAdapter) {
+    // Start LiveKit service if enabled
+    if (this.liveKitService) {
       await this.liveKitService.start();
-      await this.liveKitAdapter.initialize();
-      console.log('LiveKit adapter initialized');
+      console.log('LiveKit service started');
     }
 
     // Start syncing
@@ -103,18 +83,17 @@ export class MatrixClientService {
    */
   stop(): void {
     console.log('Stopping Matrix client...');
-    this.callMediaService.stop();
 
     // Stop audio pipeline (Phase 4)
     if (this.audioPipeline) {
       this.audioPipeline.stop().catch(() => {});
     }
-    
+
     // Stop LiveKit service if running
     if (this.liveKitService) {
       this.liveKitService.stop();
     }
-    
+
     this.client.stop();
     this.isRunning = false;
   }
@@ -134,13 +113,6 @@ export class MatrixClientService {
   }
 
   /**
-   * Get the call media service (Phase 2)
-   */
-  getCallMediaService(): MatrixCallMediaService {
-    return this.callMediaService;
-  }
-
-  /**
    * Get the voice call handler
    */
   getVoiceCallHandler(): VoiceCallHandler {
@@ -148,17 +120,10 @@ export class MatrixClientService {
   }
 
   /**
-   * Get the LiveKit service (Phase 3)
+   * Get the LiveKit service
    */
   getLiveKitService(): LiveKitService | null {
     return this.liveKitService;
-  }
-
-  /**
-   * Get the LiveKit adapter (Phase 3)
-   */
-  getLiveKitAdapter(): MatrixLiveKitAdapter | null {
-    return this.liveKitAdapter;
   }
 
   /**
@@ -186,7 +151,7 @@ export class MatrixClientService {
       }
     });
 
-    // Handle room events (for call control)
+    // Handle room events (for call control and MatrixRTC)
     this.client.on('room.event', async (roomId, event) => {
       try {
         await this.voiceCallHandler.handleEvent(roomId, event);

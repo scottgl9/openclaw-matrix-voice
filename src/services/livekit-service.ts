@@ -33,6 +33,7 @@ export class LiveKitService {
   private isRunning: boolean;
   private apiKey: string;
   private apiSecret: string;
+  private url: string;
 
   constructor(config: LiveKitConfig) {
     this.roomService = new RoomServiceClient(config.url, config.apiKey, config.apiSecret);
@@ -40,6 +41,14 @@ export class LiveKitService {
     this.isRunning = false;
     this.apiKey = config.apiKey;
     this.apiSecret = config.apiSecret;
+    this.url = config.url;
+  }
+
+  /**
+   * Get the LiveKit server URL
+   */
+  getUrl(): string {
+    return this.url;
   }
 
   /**
