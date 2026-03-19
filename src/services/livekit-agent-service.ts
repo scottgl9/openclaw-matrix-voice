@@ -219,6 +219,7 @@ export class LiveKitAgentService extends EventEmitter {
           format: 'pcm16',
           timestamp: Date.now(),
           durationMs: (resampled.length / (PIPELINE_SAMPLE_RATE * 2)) * 1000,
+          participantIdentity: participant.identity,
         });
       }
     } catch (error: any) {

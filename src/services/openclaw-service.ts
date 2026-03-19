@@ -1,5 +1,9 @@
 import axios, { AxiosError } from 'axios';
 import { config } from '../config/index.js';
+import { RateLimiter } from '../utils/rate-limiter.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('OpenClaw');
 
 export interface OpenClawResponse {
   success: boolean;
@@ -10,17 +14,21 @@ export interface OpenClawResponse {
 export class OpenClawService {
   private baseUrl: string;
   private token: string;
+  private rateLimiter: RateLimiter;
 
   constructor(baseUrl?: string, token?: string) {
     this.baseUrl = baseUrl || config.openclaw.apiUrl;
     this.token = token || config.openclaw.apiToken;
+    this.rateLimiter = new RateLimiter({
+      maxTokens: 10,
+      refillRate: 5,
+      label: 'OpenClaw',
+    });
   }
 
-  /**
-   * Send text to OpenClaw agent and get response
-   * Uses the gateway HTTP API for text processing
-   */
   async processText(text: string): Promise<OpenClawResponse> {
+    await this.rateLimiter.acquire();
+
     try {
       const response = await axios.post(
         `${this.baseUrl}/gateway`,
@@ -44,22 +52,11 @@ export class OpenClawService {
       };
     } catch (error) {
       const axiosError = error as AxiosError;
-      console.error('OpenClaw API error:', axiosError.message);
+      log.error('API error', { error: axiosError.message });
       return {
         success: false,
         error: axiosError.message,
       };
     }
   }
-
-  /**
-   * Alternative: Use WebSocket gateway protocol for more interactive communication
-   */
-  async processTextWebSocket(text: string): Promise<OpenClawResponse> {
-    // This would be implemented for WebSocket-based communication
-    // For MVP, we'll use HTTP API
-    return this.processText(text);
-  }
 }
-
-export const openClawService = new OpenClawService();
