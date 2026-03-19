@@ -6,11 +6,13 @@ import { VoiceCallHandler } from '../handlers/voice-call-handler.js';
 import { MatrixCallMediaService } from './matrix-call-media-service.js';
 import { LiveKitService } from './livekit-service.js';
 import { MatrixLiveKitAdapter } from './matrix-livekit-adapter.js';
+import { AudioPipelineService } from './audio-pipeline.js';
 
 export class MatrixClientService {
   private client: MatrixClient;
   private voiceCallHandler: VoiceCallHandler;
   private callMediaService: MatrixCallMediaService;
+  private audioPipeline: AudioPipelineService | null;
   private liveKitService: LiveKitService | null;
   private liveKitAdapter: MatrixLiveKitAdapter | null;
   private isRunning = false;
@@ -25,8 +27,17 @@ export class MatrixClientService {
     const storage = new SimpleFsStorageProvider('./bot-storage.json');
     this.client = new MatrixClient(homeserver, accessToken, storage);
     
+    // Initialize audio pipeline (Phase 4)
+    this.audioPipeline = new AudioPipelineService({
+      sampleRate: config.audio.sampleRate,
+      channels: 1,
+      format: config.audio.format,
+      frameDurationMs: 20,
+      loopbackEnabled: true,
+    });
+    
     // Create call media service first
-    this.callMediaService = new MatrixCallMediaService(this.client);
+    this.callMediaService = new MatrixCallMediaService(this.client, this.audioPipeline);
     
     // Initialize LiveKit services if enabled
     this.liveKitService = null;
@@ -60,6 +71,13 @@ export class MatrixClientService {
     AutojoinRoomsMixin.setupOnClient(this.client);
 
     // Set up event handlers
+
+    // Initialize audio pipeline (Phase 4)
+    if (this.audioPipeline) {
+      await this.audioPipeline.initialize();
+      await this.audioPipeline.start();
+      console.log('Audio pipeline initialized');
+    }
     this.setupEventHandlers();
 
     // Start call media service (Phase 2)
@@ -86,6 +104,11 @@ export class MatrixClientService {
   stop(): void {
     console.log('Stopping Matrix client...');
     this.callMediaService.stop();
+
+    // Stop audio pipeline (Phase 4)
+    if (this.audioPipeline) {
+      this.audioPipeline.stop().catch(() => {});
+    }
     
     // Stop LiveKit service if running
     if (this.liveKitService) {
@@ -134,6 +157,14 @@ export class MatrixClientService {
   /**
    * Get the LiveKit adapter (Phase 3)
    */
+
+  /**
+   * Get the audio pipeline (Phase 4)
+   */
+  getAudioPipeline(): AudioPipelineService | null {
+    return this.audioPipeline;
+  }
+
   getLiveKitAdapter(): MatrixLiveKitAdapter | null {
     return this.liveKitAdapter;
   }

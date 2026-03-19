@@ -1,5 +1,6 @@
 import { MatrixClient } from 'matrix-bot-sdk';
 import { EventEmitter } from 'events';
+import { AudioPipelineService, AudioFrame } from './audio-pipeline.js';
 
 /**
  * Matrix Call Media Service
@@ -12,6 +13,11 @@ import { EventEmitter } from 'events';
  * - Call state management for WebRTC sessions
  * - Audio stream routing stubs (ready for STT/TTS integration)
  * - Media upload/download helpers
+ * 
+ * Phase 4 Integration:
+ * - AudioPipelineService for real audio frame handling
+ * - Loopback path for testing audio flow
+ * - STT/TTS integration points
  * 
  * Limitations (to be addressed in Phase 3+):
  * - WebRTC peer connection not yet established (requires browser/worker environment)
@@ -46,12 +52,14 @@ export class MatrixCallMediaService extends EventEmitter {
   private client: MatrixClient;
   private callSessions: Map<string, CallSession>;
   private isRunning: boolean;
+  private audioPipeline: AudioPipelineService | null = null;
 
-  constructor(client: MatrixClient) {
+  constructor(client: MatrixClient, audioPipeline?: AudioPipelineService) {
     super();
     this.client = client;
     this.callSessions = new Map();
     this.isRunning = false;
+    this.audioPipeline = audioPipeline || null;
   }
 
   /**
@@ -282,6 +290,7 @@ export class MatrixCallMediaService extends EventEmitter {
    * Send outbound audio to a call
    * Phase 2: Stub - log only
    * Phase 3+: Encode and send via WebRTC data channel or media stream
+   * Phase 4: Use AudioPipeline for audio frame handling
    */
   async sendAudio(roomId: string, audioData: Buffer, mimeType: string): Promise<void> {
     const session = this.callSessions.get(roomId);
@@ -291,6 +300,16 @@ export class MatrixCallMediaService extends EventEmitter {
     }
 
     console.log(`[CallMedia] Sending ${audioData.length} bytes of outbound audio in ${roomId}`);
+
+    // Phase 4: Use AudioPipeline if available
+    if (this.audioPipeline?.isRunningFlag()) {
+      try {
+        await this.audioPipeline.sendOutboundAudio(audioData);
+        console.log('[CallMedia] Audio sent via pipeline');
+      } catch (error: any) {
+        console.error('[CallMedia] Pipeline send error:', error.message);
+      }
+    }
 
     // Phase 2: Log only
     // Phase 3+: Send via WebRTC
@@ -306,6 +325,48 @@ export class MatrixCallMediaService extends EventEmitter {
     };
 
     this.emit('media.outbound', { session, audioData, mimeType, mediaEvent });
+  }
+
+  /**
+   * Process inbound audio from audio pipeline
+   * Phase 4: Bridge audio pipeline to call media service
+   */
+  async processInboundAudio(roomId: string, frame: AudioFrame): Promise<void> {
+    const session = this.callSessions.get(roomId);
+    if (!session) {
+      console.warn('[CallMedia] No active call for inbound audio in', roomId);
+      return;
+    }
+
+    console.log(`[CallMedia] Processing inbound audio frame: ${frame.data.length} bytes`);
+
+    // Emit media event
+    const mediaEvent: CallMediaEvent = {
+      type: 'audio',
+      direction: 'inbound',
+      timestamp: new Date(),
+      sampleRate: frame.sampleRate,
+      channels: frame.channels,
+      duration: frame.durationMs,
+    };
+
+    this.emit('media.inbound', { session, frame, mediaEvent });
+  }
+
+  /**
+   * Set audio pipeline for audio frame handling
+   * Phase 4: Connect audio pipeline to call media service
+   */
+  setAudioPipeline(pipeline: AudioPipelineService): void {
+    this.audioPipeline = pipeline;
+    console.log('[CallMedia] Audio pipeline attached');
+  }
+
+  /**
+   * Get audio pipeline
+   */
+  getAudioPipeline(): AudioPipelineService | null {
+    return this.audioPipeline;
   }
 
   /**

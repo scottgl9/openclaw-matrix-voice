@@ -29,11 +29,14 @@ This project is implementing real Matrix voice call support in phases:
 - **STT Integration**: Connect Whisper/Vosk for speech-to-text
 - **TTS Audio Response**: Send TTS audio back via WebRTC data channel
 
-### Phase 4 (Future)
-- **Echo Cancellation**: AEC for full-duplex conversation
-- **Noise Suppression**: NS for cleaner audio
-- **Adaptive Bitrate**: Dynamic quality adjustment
-- **Call Recording**: Optional call recording with user consent
+### Phase 4 (Current - VAD Integration)
+- **Voice Activity Detection (VAD)**: Speech start/end detection and turn segmentation
+- **Turn Detection**: Automatic turn-based conversation management
+- **Energy-Based VAD**: RMS energy calculation for speech/silence decision
+- **Configurable Thresholds**: Energy threshold, silence duration, min speech duration
+- **Turn ID Tracking**: Unique turn IDs for conversation tracking
+- **Statistics**: Frame counter, speech duration, turns completed
+- **Unit Tests**: 144 tests passing (including 31 VAD service tests)
 
 ---
 
@@ -54,6 +57,7 @@ This project is implementing real Matrix voice call support in phases:
 - ✓ Auto-accept incoming calls
 - ✓ Send call invites for outbound calls
 - ✓ Audio event routing infrastructure
+- ✓ Audio pipeline service for frame processing
 
 ### Text-Simulated Path (Full)
 - ✓ `/call start` command to begin text-simulated call
@@ -131,6 +135,8 @@ src/
 │   ├── matrix-call-media-service.ts # Call media plumbing (Phase 2)
 │   ├── livekit-service.ts        # LiveKit room/token management (Phase 3)
 │   ├── matrix-livekit-adapter.ts # Matrix-LiveKit bridge (Phase 3)
+│   ├── audio-pipeline.ts         # Audio frame processing pipeline (Phase 4)
+│   ├── vad-service.ts            # Voice Activity Detection (Phase 4)
 │   ├── openclaw-service.ts       # OpenClaw API integration
 │   └── chatterbox-tts-service.ts # TTS service
 ├── config/
@@ -142,6 +148,8 @@ tests/
 ├── matrix-call-media-service.test.ts # Call media tests (Phase 2)
 ├── livekit-service.test.ts       # LiveKit service tests (Phase 3)
 ├── matrix-livekit-adapter.test.ts # Adapter tests (Phase 3)
+├── audio-pipeline.test.ts        # Audio pipeline tests (Phase 4)
+├── vad-service.test.ts           # VAD service tests (Phase 4)
 ├── openclaw-service.test.ts      # OpenClaw service tests
 └── chatterbox-tts-service.test.ts # TTS service tests
 ```
