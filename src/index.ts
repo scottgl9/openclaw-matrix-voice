@@ -2,6 +2,8 @@ import { config, validateConfig } from './config/index.js';
 import { OpenClawService } from './services/openclaw-service.js';
 import { ChatterboxTTSService } from './services/chatterbox-tts-service.js';
 import { createMatrixClientService } from './services/matrix-client-service.js';
+import { STTService, MockSTTAdapter } from './services/stt-adapter.js';
+import { TurnProcessorService } from './services/turn-processor.js';
 
 async function main(): Promise<void> {
   console.log('🎙️  OpenClaw Matrix Voice Call Service');
@@ -25,6 +27,17 @@ async function main(): Promise<void> {
   const ttsService = new ChatterboxTTSService();
   console.log('  - Chatterbox TTS:', config.chatterbox.ttsUrl);
 
+  // Phase 5: Initialize STT and Turn Processor
+  console.log('\n🎙️  Initializing Phase 5 components...');
+  
+  const sttService = new STTService(new MockSTTAdapter(['Hello', 'Test transcription', 'Mock response']));
+  await sttService.initialize();
+  console.log('  - STT Service:', sttService.getAdapterName());
+  
+  const turnProcessor = new TurnProcessorService(openClawService, ttsService, sttService);
+  await turnProcessor.initialize();
+  console.log('  - Turn Processor: Ready');
+
   // Create Matrix client
   console.log('\n🔐 Connecting to Matrix...');
   const matrixService = createMatrixClientService(openClawService, ttsService);
@@ -32,6 +45,11 @@ async function main(): Promise<void> {
   try {
     await matrixService.start();
     console.log('✅ Matrix client connected\n');
+    
+    // Wire turn processor to voice call handler
+    const voiceCallHandler = matrixService.getVoiceCallHandler();
+    voiceCallHandler.setTurnProcessor(turnProcessor);
+    console.log('  - Turn processor wired to voice call handler\n');
   } catch (error: any) {
     console.error('❌ Failed to connect to Matrix:', error.message);
     process.exit(1);

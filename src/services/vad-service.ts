@@ -352,7 +352,7 @@ export class VadService extends EventEmitter {
       turnId: this.currentTurnId,
     };
     
-    this.emit(VadEventType.SPEECH_START, event);
+    this.emit('speech.start', event);
     this.log(`Speech started: ${this.currentTurnId}`);
   }
 
@@ -378,7 +378,7 @@ export class VadService extends EventEmitter {
       turnId: this.currentTurnId,
     };
     
-    this.emit(VadEventType.SPEECH_END, event);
+    this.emit('speech.end', event);
     this.log(`Speech ended: ${this.currentTurnId} (duration=${speechDuration}ms)`);
     
     // Reset speech tracking (turn-related reset is done in emitTurnEnd)
@@ -415,7 +415,7 @@ export class VadService extends EventEmitter {
       turnId,
     };
     
-    this.emit(VadEventType.TURN_END, event);
+    this.emit('turn.end', event);
     this.log(`Turn completed: ${turnId}`);
   }
 

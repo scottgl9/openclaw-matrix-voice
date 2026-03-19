@@ -3,6 +3,9 @@ import { OpenClawService } from '../services/openclaw-service.js';
 import { ChatterboxTTSService } from '../services/chatterbox-tts-service.js';
 import { MatrixClientService } from '../services/matrix-client-service.js';
 import { MatrixCallMediaService } from '../services/matrix-call-media-service.js';
+import { AudioPipelineService } from '../services/audio-pipeline.js';
+import { TurnProcessorService } from '../services/turn-processor.js';
+import { VadService } from '../services/vad-service.js';
 
 export interface CallState {
   isActive: boolean;
@@ -12,6 +15,10 @@ export interface CallState {
   // Phase 2: Real call media support
   callId?: string;
   isRealMediaCall?: boolean;
+  // Phase 5: VAD and turn processing
+  audioPipeline?: AudioPipelineService;
+  turnProcessor?: TurnProcessorService;
+  vadService?: VadService;
 }
 
 export class VoiceCallHandler {
@@ -21,6 +28,9 @@ export class VoiceCallHandler {
   private ttsService: ChatterboxTTSService;
   private callMediaService: MatrixCallMediaService;
   private activeCalls: Map<string, CallState> = new Map();
+  
+  // Phase 5: Turn processor for end-to-end processing
+  private turnProcessor: TurnProcessorService | null = null;
 
   constructor(
     matrixService: MatrixClientService,
@@ -34,6 +44,14 @@ export class VoiceCallHandler {
     this.ttsService = ttsService;
     // Use provided call media service or create a new one
     this.callMediaService = callMediaService || new MatrixCallMediaService(this.client);
+  }
+
+  /**
+   * Set turn processor for Phase 5 integration
+   */
+  setTurnProcessor(turnProcessor: TurnProcessorService): void {
+    this.turnProcessor = turnProcessor;
+    console.log('[VoiceCallHandler] Turn processor attached');
   }
 
   /**
@@ -117,7 +135,7 @@ export class VoiceCallHandler {
 
   /**
    * Start a voice call in a room
-   * Phase 2/3: Support text-simulated, WebRTC, and LiveKit calls
+   * Phase 2/3/5: Support text-simulated, WebRTC, LiveKit, and VAD-driven calls
    */
   async startCall(roomId: string, useRealMedia = false): Promise<void> {
     console.log(`Starting voice call in ${roomId} (real media: ${useRealMedia})`);
@@ -130,6 +148,15 @@ export class VoiceCallHandler {
     };
 
     if (useRealMedia) {
+      // Phase 5: Initialize VAD-driven audio pipeline
+      try {
+        await this.initializeAudioPipeline(roomId, callState);
+      } catch (error: any) {
+        console.error('[VoiceCallHandler] Error initializing audio pipeline:', error.message);
+        // Continue without pipeline - will fall back to text mode
+        callState.isRealMediaCall = false;
+      }
+
       // Phase 3: Try LiveKit first, fall back to WebRTC/Matrix call
       const liveKitAdapter = this.matrixService.getLiveKitAdapter();
       
@@ -171,13 +198,89 @@ export class VoiceCallHandler {
     let message = '🎤 Voice call started. Speak clearly and I\'ll respond.';
     if (useRealMedia) {
       if (callState.callId?.startsWith('livekit_')) {
-        message = '🎤 LiveKit voice call started. I\'m listening...';
+        message = '🎤 LiveKit voice call started (VAD-driven). I\'m listening...';
       } else {
         message = '🎤 Real voice call started (Matrix/WebRTC). I\'m listening...';
       }
     }
     
     await this.matrixService.sendMessage(roomId, message);
+  }
+
+  /**
+   * Initialize audio pipeline with VAD and turn processor (Phase 5)
+   */
+  private async initializeAudioPipeline(roomId: string, callState: CallState): Promise<void> {
+    console.log('[VoiceCallHandler] Initializing audio pipeline for', roomId);
+
+    // Create audio pipeline
+    const pipeline = new AudioPipelineService({
+      sampleRate: 16000,
+      channels: 1,
+      format: 'pcm16',
+      frameDurationMs: 20,
+      loopbackEnabled: false,
+      vadEnabled: true,
+    });
+
+    // Create VAD service
+    const vadService = new VadService({
+      energyThreshold: 0.3,
+      silenceThresholdMs: 800,
+      minSpeechDurationMs: 200,
+      preRollMs: 100,
+      postRollMs: 300,
+      frameDurationMs: 20,
+      debug: false,
+    });
+
+    // Create turn processor
+    let turnProcessor: TurnProcessorService | null = null;
+    if (this.turnProcessor) {
+      turnProcessor = this.turnProcessor;
+    }
+
+    // Initialize pipeline
+    await pipeline.initialize();
+    await pipeline.start();
+
+    // Attach VAD to pipeline
+    pipeline.setVadService(vadService);
+    vadService.start();
+
+    // Set up turn completion handler
+    if (turnProcessor) {
+      await turnProcessor.initialize();
+      
+      pipeline.on('turn.complete', async (event: any) => {
+        console.log('[VoiceCallHandler] Turn complete event, processing...');
+        await turnProcessor!.handleTurnCompletion(event);
+      });
+
+      // Set up TTS audio handler
+      turnProcessor.on('tts.audio', async (event: any) => {
+        console.log('[VoiceCallHandler] TTS audio ready, sending to room...');
+        try {
+          await this.matrixService.sendAudio(roomId, event.audioData, event.mimeType);
+        } catch (error: any) {
+          console.error('[VoiceCallHandler] Error sending TTS audio:', error.message);
+          // Fallback to text
+          await this.matrixService.sendMessage(roomId, `🤖 [TTS error: ${event.responseText}]`);
+        }
+      });
+
+      // Set up error handler
+      turnProcessor.on('error', async (event: any) => {
+        console.error('[VoiceCallHandler] Turn processing error:', event.error);
+        await this.matrixService.sendMessage(roomId, `❌ Processing error: ${event.error}`);
+      });
+    }
+
+    callState.audioPipeline = pipeline;
+    callState.vadService = vadService;
+    callState.turnProcessor = turnProcessor || undefined;
+
+    console.log('[VoiceCallHandler] Audio pipeline initialized with VAD and turn processor');
   }
 
   /**
@@ -190,6 +293,27 @@ export class VoiceCallHandler {
     if (callState) {
       callState.isActive = false;
       
+      // Phase 5: Stop audio pipeline, VAD, and turn processor
+      if (callState.audioPipeline) {
+        try {
+          await callState.audioPipeline.stop();
+        } catch (error) {
+          console.error('[VoiceCallHandler] Error stopping audio pipeline:', error);
+        }
+      }
+      
+      if (callState.vadService) {
+        callState.vadService.stop();
+      }
+      
+      if (callState.turnProcessor) {
+        try {
+          await callState.turnProcessor.shutdown();
+        } catch (error) {
+          console.error('[VoiceCallHandler] Error shutting down turn processor:', error);
+        }
+      }
+
       // Phase 3: End LiveKit call if active
       if (callState.isRealMediaCall && callState.callId?.startsWith('livekit_')) {
         const liveKitAdapter = this.matrixService.getLiveKitAdapter();

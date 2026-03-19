@@ -157,16 +157,15 @@ export class MatrixClientService {
   /**
    * Get the LiveKit adapter (Phase 3)
    */
+  getLiveKitAdapter(): MatrixLiveKitAdapter | null {
+    return this.liveKitAdapter;
+  }
 
   /**
    * Get the audio pipeline (Phase 4)
    */
   getAudioPipeline(): AudioPipelineService | null {
     return this.audioPipeline;
-  }
-
-  getLiveKitAdapter(): MatrixLiveKitAdapter | null {
-    return this.liveKitAdapter;
   }
 
   /**

@@ -2,7 +2,7 @@
  * Audio Pipeline Service
  * 
  * Provides the core audio processing pipeline for real-time voice calls.
- * This is the Phase 4 implementation that bridges STT/TTS with LiveKit/Matrix media.
+ * This is the Phase 4/5 implementation that bridges STT/TTS with LiveKit/Matrix media.
  * 
  * Phase 4 Goals:
  * - Define audio ingress/egress abstractions for media frame handling
@@ -10,10 +10,18 @@
  * - Integrate with existing call lifecycle and fallback logic
  * - Prepare for STT -> OpenClaw -> TTS live call path
  * 
+ * Phase 5 Goals:
+ * - Integrate VAD-driven turn completion into audio pipeline flow
+ * - Wire completed turn text through OpenClaw service and into TTS output flow
+ * - Add STT adapter interface + initial implementation hook
+ * 
  * Architecture:
  * 
  * Ingress Path (User -> Bot):
- *   LiveKit Track → AudioIngress → STT (future) → Text → OpenClaw
+ *   LiveKit Track → AudioIngress → VAD → STT → Text → OpenClaw
+ * 
+ * Processing Flow:
+ *   Audio Frame → VAD → Speech Detection → Turn Completion → STT → Text
  * 
  * Egress Path (Bot -> User):
  *   OpenClaw → TTS → AudioEgress → LiveKit Track
@@ -115,6 +123,24 @@ export interface AudioEgress {
 }
 
 /**
+ * Turn completion event data
+ * Emitted when VAD detects a complete speech turn
+ */
+export interface TurnCompletionEvent {
+  /** Turn ID */
+  turnId: string;
+  
+  /** Audio frames collected during the turn */
+  frames: AudioFrame[];
+  
+  /** Total duration of the turn in ms */
+  durationMs: number;
+  
+  /** Timestamp when turn completed */
+  timestamp: number;
+}
+
+/**
  * Audio pipeline configuration
  */
 export interface AudioPipelineConfig {
@@ -132,6 +158,9 @@ export interface AudioPipelineConfig {
   
   /** Enable loopback mode (for testing) */
   loopbackEnabled: boolean;
+  
+  /** Enable VAD integration */
+  vadEnabled: boolean;
 }
 
 /**
@@ -143,6 +172,7 @@ export const defaultAudioPipelineConfig: AudioPipelineConfig = {
   format: 'pcm16',
   frameDurationMs: 20, // 20ms frames (typical for VoIP)
   loopbackEnabled: false,
+  vadEnabled: true,
 };
 
 /**
@@ -258,6 +288,8 @@ class LoopbackEgress extends EventEmitter implements AudioEgress {
  * 
  * Orchestrates audio ingress and egress for voice calls.
  * Provides a loopback path for testing and future STT/TTS integration points.
+ * 
+ * Phase 5: Integrates VAD for turn detection and provides hooks for STT/TTS.
  */
 export class AudioPipelineService extends EventEmitter {
   private config: AudioPipelineConfig;
@@ -265,6 +297,11 @@ export class AudioPipelineService extends EventEmitter {
   private egress: AudioEgress | null = null;
   private isRunning: boolean = false;
   private frameCounter: number = 0;
+  
+  // VAD integration (Phase 5)
+  private vadService: any = null; // Import VadService dynamically to avoid circular deps
+  private currentTurnFrames: AudioFrame[] = [];
+  private currentTurnId: string | null = null;
 
   constructor(config?: Partial<AudioPipelineConfig>) {
     super();
@@ -285,6 +322,11 @@ export class AudioPipelineService extends EventEmitter {
     this.ingress.on('frame', async (frame) => {
       this.frameCounter++;
       console.log(`[AudioPipeline] Loopback frame ${this.frameCounter}: ${frame.data.length} bytes`);
+      
+      // Phase 5: Process frame through VAD if enabled
+      if (this.config.vadEnabled && this.vadService) {
+        this.processFrameThroughVAD(frame);
+      }
       
       if (this.egress?.isActive()) {
         try {
@@ -413,6 +455,8 @@ export class AudioPipelineService extends EventEmitter {
     ingressActive: boolean;
     egressActive: boolean;
     loopbackEnabled: boolean;
+    vadEnabled: boolean;
+    currentTurnId: string | null;
   } {
     return {
       running: this.isRunning,
@@ -420,6 +464,91 @@ export class AudioPipelineService extends EventEmitter {
       ingressActive: this.ingress?.isActive() || false,
       egressActive: this.egress?.isActive() || false,
       loopbackEnabled: true, // Currently always loopback
+      vadEnabled: this.config.vadEnabled,
+      currentTurnId: this.currentTurnId,
     };
+  }
+
+  // ========================================================================
+  // Phase 5: VAD Integration
+  // ========================================================================
+
+  /**
+   * Set VAD service for turn detection
+   * Called when VAD service is available
+   */
+  setVadService(vadService: any): void {
+    this.vadService = vadService;
+    console.log('[AudioPipeline] VAD service attached');
+    
+    // Set up VAD event handlers
+    if (this.vadService) {
+      this.vadService.on('speech.start', (event: any) => {
+        console.log(`[AudioPipeline] Speech started: ${event.turnId}`);
+        this.currentTurnId = event.turnId;
+        this.currentTurnFrames = [];
+      });
+
+      this.vadService.on('vad.frame', (event: any) => {
+        // Collect frames during speech
+        if (this.currentTurnId && event.isSpeech) {
+          this.currentTurnFrames.push(event.frame);
+        }
+      });
+
+      this.vadService.on('turn.end', async (event: any) => {
+        console.log(`[AudioPipeline] Turn completed: ${event.turnId}`);
+        await this.emitTurnCompletion(event.turnId);
+      });
+    }
+  }
+
+  /**
+   * Process a frame through VAD
+   */
+  private processFrameThroughVAD(frame: AudioFrame): void {
+    if (!this.vadService || !this.vadService.isActive()) {
+      return;
+    }
+    
+    this.vadService.processFrame(frame);
+  }
+
+  /**
+   * Emit turn completion event
+   * This is where STT would be triggered in Phase 5
+   */
+  private async emitTurnCompletion(turnId: string): Promise<void> {
+    const durationMs = this.currentTurnFrames.length * this.config.frameDurationMs;
+    
+    const turnEvent: TurnCompletionEvent = {
+      turnId,
+      frames: [...this.currentTurnFrames],
+      durationMs,
+      timestamp: Date.now(),
+    };
+
+    // Reset turn state
+    this.currentTurnId = null;
+    this.currentTurnFrames = [];
+
+    // Emit turn completion event
+    // Phase 5: This is where STT would be triggered
+    console.log(`[AudioPipeline] Emitting turn completion: ${turnId} (${durationMs}ms, ${turnEvent.frames.length} frames)`);
+    this.emit('turn.complete', turnEvent);
+  }
+
+  /**
+   * Get current VAD service
+   */
+  getVadService(): any {
+    return this.vadService;
+  }
+
+  /**
+   * Check if VAD is integrated
+   */
+  isVadIntegrated(): boolean {
+    return this.config.vadEnabled && this.vadService !== null;
   }
 }
