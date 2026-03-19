@@ -2,7 +2,7 @@
 
 Matrix bot with voice call support using the Matrix SDK and LiveKit.
 
-## Status: Phase 3 - LiveKit Integration (In Progress)
+## Status: Phase 5 - Turn Processing Pipeline (In Progress)
 
 This project is implementing real Matrix voice call support in phases:
 
@@ -15,34 +15,54 @@ This project is implementing real Matrix voice call support in phases:
 - **Text-Simulated Fallback**: Preserve existing text-based voice call flow
 - **Unit Tests**: 50 tests covering all functionality
 
-### Phase 3 (Current - In Progress)
+### Phase 3 (Completed ✓)
 - **LiveKit Service**: Room management and token generation for LiveKit server
 - **Matrix-LiveKit Adapter**: Bridge between Matrix calls and LiveKit rooms
 - **Async Method Fixes**: Resolved adapter/service method signature mismatches
 - **Unit Tests**: 94 tests covering all functionality (including LiveKit)
 - **Build & Test Pipeline**: TypeScript compilation and test suite passing
 
-### Phase 3 (Remaining)
-- **WebRTC Peer Connection**: Establish RTCPeerConnection for real-time media
-- **Audio Capture**: Capture microphone audio via WebRTC MediaStream
-- **Audio Playback**: Play remote audio through WebRTC remote stream
-- **STT Integration**: Connect Whisper/Vosk for speech-to-text
-- **TTS Audio Response**: Send TTS audio back via WebRTC data channel
-
-### Phase 4 (Current - VAD Integration)
+### Phase 4 (Completed ✓)
 - **Voice Activity Detection (VAD)**: Speech start/end detection and turn segmentation
 - **Turn Detection**: Automatic turn-based conversation management
 - **Energy-Based VAD**: RMS energy calculation for speech/silence decision
 - **Configurable Thresholds**: Energy threshold, silence duration, min speech duration
 - **Turn ID Tracking**: Unique turn IDs for conversation tracking
 - **Statistics**: Frame counter, speech duration, turns completed
-- **Unit Tests**: 144 tests passing (including 31 VAD service tests)
+- **Audio Pipeline**: Frame-based audio processing with loopback testing
+- **Unit Tests**: 144 tests passing (31 VAD + 19 audio pipeline + 94 existing)
+
+### Phase 5 (Current - In Progress)
+- **STT Adapter Interface**: Pluggable STT provider interface (MockSTT implemented)
+- **STT Service**: Manages STT adapter and transcription flow
+- **Turn Processor Service**: Orchestrates complete turn processing flow (VAD → STT → OpenClaw → TTS)
+- **Integration Points**: AudioPipeline → TurnProcessor → STT → OpenClaw → TTS → Audio Egress
+- **TurnCompletionEvent**: Bridges VAD turn completion to processing pipeline
+- **TTSAudioEvent**: Emits TTS audio for playback
+- **Unit Tests**: New STT/turn processor tests pending
+- **Build & Test Pipeline**: TypeScript compilation passing, 144 tests passing
 
 ---
 
-## What's Functional Now (Phase 3 - In Progress)
+## What's Functional Now (Phase 5 - In Progress)
 
-### LiveKit Integration Layer (Partial)
+### Turn Processing Pipeline (Phase 5 - Partial)
+- ✓ STTAdapter interface: Pluggable STT provider abstraction
+- ✓ MockSTTAdapter: Mock implementation for testing
+- ✓ STTService: Manages STT adapter lifecycle and transcription flow
+- ✓ TurnProcessorService: Orchestrates VAD → STT → OpenClaw → TTS flow
+- ✓ TurnCompletionEvent: Bridges VAD turn completion to processing
+- ✓ TTSAudioEvent: Emits TTS audio for playback
+- ✓ Integration hooks in VoiceCallHandler for audio pipeline
+
+### VAD & Audio Pipeline (Phase 4 - Full)
+- ✓ VadService: Energy-based speech detection with state machine
+- ✓ AudioPipelineService: Frame-based audio processing
+- ✓ Turn ID tracking and statistics
+- ✓ Configurable thresholds (energy, silence, min speech duration)
+- ✓ 31 VAD tests + 19 audio pipeline tests passing
+
+### LiveKit Integration Layer (Full)
 - ✓ LiveKitService: Room creation, deletion, listing, and participant tracking
 - ✓ LiveKit token generation with JWT authentication
 - ✓ MatrixLiveKitAdapter: Bridge between Matrix rooms and LiveKit rooms
@@ -70,8 +90,9 @@ This project is implementing real Matrix voice call support in phases:
 ### Current Limitations
 - ✗ WebRTC peer connection not yet established
 - ✗ Real audio capture/playback not yet implemented
-- ✗ STT integration pending
+- ✗ Real STT integration pending (MockSTT only)
 - ✗ LiveKit server connection requires configuration
+- ✗ End-to-end turn processing integration pending
 
 ## Architecture
 
@@ -179,7 +200,7 @@ npm test        # Run tests with Vitest
 npm start
 ```
 
-## Current Limitations (Phase 2)
+## Current Limitations (Phase 5)
 
 1. **No Real-Time Audio**: Audio capture and playback are not yet implemented
 2. **No WebRTC**: Peer connections are not established
@@ -188,7 +209,7 @@ npm start
 
 ## Roadmap
 
-### Phase 3 (Current - In Progress)
+### Phase 3 (Completed ✓)
 - [x] LiveKit service integration (room management, token generation)
 - [x] Matrix-LiveKit adapter with event emission
 - [x] Async method signature fixes across adapter/service
@@ -199,19 +220,76 @@ npm start
 - [ ] STT service integration (Whisper/Vosk)
 - [ ] TTS audio response via WebRTC
 
-### Phase 4 (Current - VAD Integration)
+### Phase 4 (Completed ✓)
 - [x] Voice Activity Detection (VAD) service with energy-based speech detection
 - [x] Turn detection with unique turn ID tracking
 - [x] Audio pipeline service for frame processing
 - [x] Frame-based timing for reliable testability
 - [x] Configurable thresholds (energy, silence, min speech duration)
 - [x] Turn statistics (frame counter, speech duration, turns completed)
-- [x] 144 unit tests passing (including 31 VAD tests)
+- [x] 144 unit tests passing (31 VAD + 19 audio pipeline + 94 existing)
 - [ ] Echo cancellation
 - [ ] Noise suppression
 - [ ] Adaptive bitrate
 - [ ] Call recording
 - [ ] Multi-party call support
+
+### Phase 5 (Current - In Progress)
+- [x] STT adapter interface (pluggable provider abstraction)
+- [x] MockSTTAdapter for testing
+- [x] STTService for transcription flow management
+- [x] TurnProcessorService for end-to-end turn processing
+- [x] TurnCompletionEvent and TTSAudioEvent bridges
+- [ ] Real STT adapter implementation (Whisper/Vosk)
+- [ ] End-to-end integration: VAD → STT → OpenClaw → TTS
+- [ ] TurnProcessor integration with VoiceCallHandler
+- [ ] Unit tests for STT and TurnProcessor services
+
+### Future Phases
+- [ ] WebRTC peer connection establishment
+- [ ] Real audio capture/playback
+- [ ] TTS audio response via WebRTC data channel
+- [ ] Multi-party call support
+
+## Version History
+
+- **v0.5.0** (Current): Phase 5 - Turn Processing Pipeline (In Progress)
+  - STT adapter interface (pluggable STT provider abstraction)
+  - MockSTTAdapter for testing and development
+  - STTService for transcription flow management
+  - TurnProcessorService for end-to-end turn processing (VAD → STT → OpenClaw → TTS)
+  - TurnCompletionEvent and TTSAudioEvent for pipeline bridging
+  - Integration hooks in VoiceCallHandler for audio pipeline
+  - 144 unit tests passing (31 VAD + 19 audio pipeline + 94 existing)
+  - Build pipeline passing
+
+- **v0.4.0**: Phase 4 - VAD Integration (completed)
+  - Audio pipeline service for frame processing
+  - Voice Activity Detection (VAD) service with energy-based speech detection
+  - Turn detection with unique turn IDs and state machine
+  - Frame-based timing for reliable testability
+  - Configurable VAD thresholds (energy, silence, min speech duration)
+  - VAD statistics (frame counter, speech duration, turns completed)
+  - 144 unit tests passing (31 VAD + 19 audio pipeline + 94 existing)
+  - Build pipeline passing
+
+- **v0.3.0**: Phase 3 - LiveKit Integration (completed)
+  - LiveKit service for room/token management
+  - Matrix-LiveKit adapter bridge
+  - Async method signature fixes (generateToken, getUserId)
+  - Unit tests (94 passing)
+  - Build pipeline passing
+
+- **v0.2.0**: Phase 2 - Call media plumbing
+  - Matrix call event handling
+  - Call session management
+  - Text-simulated voice calls
+  - Unit tests (50 passing)
+
+- **v0.1.0**: Initial MVP
+  - Text-based voice simulation
+  - OpenClaw API integration
+  - Chatterbox TTS
 
 ## License
 

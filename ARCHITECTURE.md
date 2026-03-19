@@ -6,7 +6,8 @@ OpenClaw Matrix Voice is a Matrix bot that provides voice call functionality. Th
 - Text-simulated voice calls (MVP)
 - Real-time WebRTC-based voice calls (Phase 2+)
 - LiveKit integration for scalable media (Phase 3)
-- Voice Activity Detection (VAD) for turn-based conversation (Phase 4 - Current)
+- Voice Activity Detection (VAD) for turn-based conversation (Phase 4)
+- Turn processing pipeline: VAD → STT → OpenClaw → TTS (Phase 5 - Current)
 
 ## System Components
 
@@ -191,6 +192,66 @@ interface AudioFrame {
 
 **Responsibility**: Detects speech activity and segments conversation turns.
 
+### 10. STTAdapter & STTService
+
+**Location**: `src/services/stt-adapter.ts`
+
+**Responsibility**: Provides pluggable STT provider interface and transcription flow management.
+
+**Key Features**:
+- STTAdapter interface for provider abstraction (Whisper, Vosk, Google Cloud STT, etc.)
+- MockSTTAdapter for testing and development
+- STTService manages adapter lifecycle and transcription turns
+- Frame-based transcription with turn completion
+- Turn ID association with transcription results
+
+**Phase 5 Implementation**:
+- ✓ STTAdapter interface definition
+- ✓ MockSTTAdapter with configurable mock responses
+- ✓ STTService with startTurn, processFrame, finalizeTurn methods
+- ✓ STTResult interface (text, confidence, language, duration, turnId)
+- ✓ 0 unit tests (pending - new component)
+
+**Integration**: Used by TurnProcessorService for transcription.
+
+### 11. TurnProcessorService
+
+**Location**: `src/services/turn-processor.ts`
+
+**Responsibility**: Orchestrates complete turn processing flow from VAD to TTS output.
+
+**Key Features**:
+- End-to-end turn processing: VAD turn completion → STT → OpenClaw → TTS → Audio output
+- State machine: IDLE → TRANSCRIBING → PROCESSING → RESPONDING → ERROR
+- Event emission for turn processing state changes
+- TTS audio emission for playback
+- Error handling and recovery
+
+**Phase 5 Implementation**:
+- ✓ TurnProcessorService with state machine
+- ✓ handleTurnCompletion() entry point
+- ✓ Internal methods: transcribeTurn(), processText(), generateTTS(), emitTTSAudio()
+- ✓ TurnProcessingState enum and TurnProcessingEvent interface
+- ✓ TTSAudioEvent for TTS audio output
+- ✓ 0 unit tests (pending - new component)
+
+**Integration**: Bridges VAD/AudioPipeline to OpenClaw/TTS pipeline.
+
+**Turn Processing Flow**:
+```
+VAD Turn Completion (turn.end event)
+  ↓
+TurnProcessor.handleTurnCompletion(event)
+  ↓
+Step 1: transcribeTurn() → STTService → STTResult (text)
+  ↓
+Step 2: processText() → OpenClawService → OpenClawResponse (response)
+  ↓
+Step 3: generateTTS() → ChatterboxTTSService → TTSResponse (audioData)
+  ↓
+Step 4: emitTTSAudio() → 'tts.audio' event → Audio playback
+```
+
 **Key Features**:
 - Energy-based speech detection using RMS calculation
 - State machine: IDLE → SPEECH_START → SPEECH_ACTIVE → SILENCE → IDLE
@@ -276,6 +337,32 @@ SPEECH_ACTIVE --(energy < threshold)--> SILENCE --(silence >= threshold)--> IDLE
 **Integration**: Used by VoiceCallHandler for LiveKit-based calls.
 
 ## Data Flow
+
+### Phase 5 Turn Processing Flow (Current - In Progress)
+
+```
+VAD detects turn completion (speech.end → turn.end event)
+  ↓
+AudioPipeline emits turn.end event with frames
+  ↓
+TurnProcessor.handleTurnCompletion(event)
+  ↓
+Step 1: transcribeTurn()
+  - STTService.startTurn(turnId)
+  - STTService.processFrame(frame) for each frame
+  - STTService.finalizeTurn() → STTResult { text, confidence }
+  ↓
+Step 2: processText(text)
+  - OpenClawService.processText(text) → OpenClawResponse { response }
+  ↓
+Step 3: generateTTS(response)
+  - ChatterboxTTSService.textToSpeechCached(response) → TTSResponse { audioData }
+  ↓
+Step 4: emitTTSAudio(turnId, audioData)
+  - TurnProcessor emits 'tts.audio' event
+  ↓
+Audio playback / WebRTC send / Matrix upload
+```
 
 ### Text-Simulated Call (Current - Full)
 
@@ -436,11 +523,18 @@ interface CallState {
   - Error handling
 
 ### Test Coverage
-- All 144 tests passing (94 existing + 50 new Phase 4 tests)
+- All 144 tests passing (94 existing + 31 VAD + 19 audio pipeline)
   - VAD Service: 31 tests
   - Audio Pipeline: 19 tests
+  - LiveKit Service: 22 tests
+  - MatrixLiveKitAdapter: 22 tests
+  - VoiceCallHandler: 19 tests
+  - MatrixCallMediaService: 23 tests
+  - OpenClawService: 3 tests
+  - ChatterboxTTSService: 5 tests
 - Build: `npm run build` passes
 - Tests: `npm test` passes
+- Pending: STT and TurnProcessor tests (Phase 5)
 
 ## Future Architecture (Phase 3+)
 
@@ -490,7 +584,17 @@ interface CallState {
 
 ## Version History
 
-- **v0.3.0** (Current): Phase 4 - VAD Integration
+- **v0.5.0** (Current): Phase 5 - Turn Processing Pipeline (In Progress)
+  - STT adapter interface (pluggable STT provider abstraction)
+  - MockSTTAdapter for testing and development
+  - STTService for transcription flow management
+  - TurnProcessorService for end-to-end turn processing (VAD → STT → OpenClaw → TTS)
+  - TurnCompletionEvent and TTSAudioEvent for pipeline bridging
+  - Integration hooks in VoiceCallHandler for audio pipeline
+  - 144 unit tests passing (31 VAD + 19 audio pipeline + 94 existing)
+  - Build pipeline passing
+
+- **v0.4.0**: Phase 4 - VAD Integration (completed)
   - Audio pipeline service for frame processing
   - Voice Activity Detection (VAD) service with energy-based speech detection
   - Turn detection with unique turn IDs and state machine
@@ -500,20 +604,20 @@ interface CallState {
   - 144 unit tests passing (31 VAD + 19 audio pipeline + 94 existing)
   - Build pipeline passing
 
-- **v0.2.0**: Phase 3 - LiveKit Integration (completed)
+- **v0.3.0**: Phase 3 - LiveKit Integration (completed)
   - LiveKit service for room/token management
   - Matrix-LiveKit adapter bridge
   - Async method signature fixes (generateToken, getUserId)
   - Unit tests (94 passing)
   - Build pipeline passing
 
-- **v0.1.0**: Phase 2 - Call media plumbing
+- **v0.2.0**: Phase 2 - Call media plumbing
   - Matrix call event handling
   - Call session management
   - Text-simulated voice calls
   - Unit tests (50 passing)
 
-- **v0.0.1**: Initial MVP
+- **v0.1.0**: Initial MVP
   - Text-based voice simulation
   - OpenClaw API integration
   - Chatterbox TTS
