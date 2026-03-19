@@ -57,7 +57,8 @@ export class MatrixClientService {
     this.isRunning = true;
 
     console.log('Matrix client started successfully');
-    console.log(`Listening for events as: ${this.client.getUserId()}`);
+    const userId = await this.client.getUserId();
+    console.log(`Listening for events as: ${userId}`);
   }
 
   /**

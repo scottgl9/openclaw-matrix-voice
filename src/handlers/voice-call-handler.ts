@@ -131,20 +131,32 @@ export class VoiceCallHandler {
       return;
     }
 
-    // Handle call control events
+    // Handle call control events and text-simulated voice input
     if (type === 'm.room.message') {
       const content = event['content'] || {};
+      const sender = event['sender'];
+
+      // Ignore our own messages
+      const botUserId = await this.client.getUserId();
+      if (sender === botUserId) return;
 
       if (content['body']) {
-        const body = content['body'].toLowerCase();
+        const body = content['body'];
+        const bodyLower = body.toLowerCase();
 
-        if (body.includes('/call start') || body.includes('/voice start')) {
-          const useLiveKit = body.includes('livekit') || body.includes('real');
+        if (bodyLower.includes('/call start') || bodyLower.includes('/voice start')) {
+          const useLiveKit = bodyLower.includes('livekit') || bodyLower.includes('real');
           await this.startCall(roomId, useLiveKit);
-        } else if (body.includes('/call end') || body.includes('/voice end')) {
+        } else if (bodyLower.includes('/call end') || bodyLower.includes('/voice end')) {
           await this.endCall(roomId);
-        } else if (body.includes('/call status') || body.includes('/voice status')) {
+        } else if (bodyLower.includes('/call status') || bodyLower.includes('/voice status')) {
           await this.sendStatus(roomId);
+        } else {
+          // Process as voice input if there's an active call in this room
+          const callState = this.activeCalls.get(roomId);
+          if (callState?.isActive && !callState.isLiveKitCall) {
+            await this.processVoiceInput(roomId, event);
+          }
         }
       }
     }

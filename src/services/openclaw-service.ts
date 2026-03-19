@@ -11,10 +11,28 @@ export interface OpenClawResponse {
   error?: string;
 }
 
+interface ChatCompletionMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+interface ChatCompletionResponse {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    message: { role: string; content: string };
+    finish_reason: string;
+  }>;
+}
+
 export class OpenClawService {
   private baseUrl: string;
   private token: string;
   private rateLimiter: RateLimiter;
+  private conversationHistory: ChatCompletionMessage[] = [];
 
   constructor(baseUrl?: string, token?: string) {
     this.baseUrl = baseUrl || config.openclaw.apiUrl;
@@ -29,34 +47,44 @@ export class OpenClawService {
   async processText(text: string): Promise<OpenClawResponse> {
     await this.rateLimiter.acquire();
 
+    this.conversationHistory.push({ role: 'user', content: text });
+
     try {
-      const response = await axios.post(
-        `${this.baseUrl}/gateway`,
+      const response = await axios.post<ChatCompletionResponse>(
+        `${this.baseUrl}/v1/chat/completions`,
         {
-          type: 'text',
-          content: text,
-          channel: 'matrix',
+          messages: this.conversationHistory,
+          stream: false,
         },
         {
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${this.token}`,
           },
-          timeout: 30000,
+          timeout: 60000,
         }
       );
 
+      const assistantMessage = response.data.choices?.[0]?.message?.content || '';
+      if (assistantMessage) {
+        this.conversationHistory.push({ role: 'assistant', content: assistantMessage });
+      }
+
       return {
         success: true,
-        response: response.data.response || response.data.text || 'No response generated',
+        response: assistantMessage || 'No response generated',
       };
     } catch (error) {
       const axiosError = error as AxiosError;
-      log.error('API error', { error: axiosError.message });
+      log.error('API error', { error: axiosError.message, status: axiosError.response?.status });
       return {
         success: false,
         error: axiosError.message,
       };
     }
+  }
+
+  clearHistory(): void {
+    this.conversationHistory = [];
   }
 }

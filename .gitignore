@@ -5,3 +5,4 @@ bot-storage.json
 data/
 test-data/
 *.tsbuildinfo
+voice-bot-credentials.txt

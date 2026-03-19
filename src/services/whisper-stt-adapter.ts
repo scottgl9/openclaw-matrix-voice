@@ -6,7 +6,8 @@
  */
 
 import axios from 'axios';
-import { WaveFile } from 'wavefile';
+import wavefile from 'wavefile';
+const { WaveFile } = wavefile;
 import { STTAdapter, STTResult } from './stt-adapter.js';
 import { AudioFrame } from './audio-pipeline.js';
 import { withRetry } from '../utils/retry.js';
