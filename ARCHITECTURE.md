@@ -2,7 +2,11 @@
 
 ## Overview
 
-OpenClaw Matrix Voice is a Matrix bot that provides voice call functionality. The system is designed to support both text-simulated voice calls (current MVP) and real-time WebRTC-based voice calls (Phase 2+).
+OpenClaw Matrix Voice is a Matrix bot that provides voice call functionality. The system supports:
+- Text-simulated voice calls (MVP)
+- Real-time WebRTC-based voice calls (Phase 2+)
+- LiveKit integration for scalable media (Phase 3)
+- Voice Activity Detection (VAD) for turn-based conversation (Phase 4 - Current)
 
 ## System Components
 
@@ -148,6 +152,101 @@ Outgoing Call:
 **Location**: `src/services/matrix-livekit-adapter.ts`
 
 **Responsibility**: Bridges Matrix calls with LiveKit rooms.
+
+### 8. AudioPipelineService
+
+**Location**: `src/services/audio-pipeline.ts`
+
+**Responsibility**: Processes audio frames through the audio processing pipeline.
+
+**Key Features**:
+- Audio frame buffering and chunking
+- Frame duration calculation based on sample rate and format
+- Frame size calculation (16-bit PCM = 2 bytes/sample)
+- Pipeline start/stop lifecycle management
+- Frame processing hooks for VAD and STT integration
+
+**Phase 4 Implementation**:
+- ✓ Audio frame structure definition
+- ✓ Frame duration calculation
+- ✓ Frame size calculation for 16-bit PCM
+- ✓ Pipeline state management
+- ✓ Frame processing interface
+
+**Frame Format**:
+```typescript
+interface AudioFrame {
+  data: Buffer;           // PCM audio data
+  sampleRate: number;     // e.g., 16000 Hz
+  channels: number;       // e.g., 1 (mono)
+  format: 'pcm16';        // 16-bit signed PCM
+  timestamp: number;      // Unix timestamp in ms
+  durationMs: number;     // Frame duration in ms
+}
+```
+
+### 9. VadService (Voice Activity Detection)
+
+**Location**: `src/services/vad-service.ts`
+
+**Responsibility**: Detects speech activity and segments conversation turns.
+
+**Key Features**:
+- Energy-based speech detection using RMS calculation
+- State machine: IDLE → SPEECH_START → SPEECH_ACTIVE → SILENCE → IDLE
+- Turn detection with unique turn IDs
+- Configurable thresholds (energy, silence, min speech duration)
+- Frame-based timing for testability
+- Statistics tracking (frames, speech duration, turns completed)
+
+**Phase 4 Implementation**:
+- ✓ RMS energy calculation for 16-bit PCM frames
+- ✓ Speech start detection (min speech duration)
+- ✓ Speech end detection (silence threshold)
+- ✓ Turn ID generation and tracking
+- ✓ State machine implementation
+- ✓ Event emission (speech.start, speech.end, turn.end, vad.frame)
+- ✓ Statistics API (getStats, resetStats)
+- ✓ 31 unit tests passing
+
+**VAD Configuration**:
+```typescript
+interface VadConfig {
+  energyThreshold: number;      // 0-1, default 0.3 (30% RMS)
+  silenceThresholdMs: number;   // ms silence before turn end, default 800
+  minSpeechDurationMs: number;  // ms minimum speech to confirm, default 200
+  preRollMs: number;            // audio before speech, default 100
+  postRollMs: number;           // audio after speech, default 300
+  frameDurationMs: number;      // frame size, default 20
+  debug: boolean;               // enable debug logging
+}
+```
+
+**Detection Algorithm**:
+1. **Frame Processing**: Calculate RMS energy for each audio frame
+2. **Speech Start**: When energy > threshold for minSpeechDurationMs
+3. **Speech Active**: Continue processing frames while energy > threshold
+4. **Silence Detection**: When energy < threshold, start silence timer
+5. **Turn End**: When silence duration > silenceThresholdMs
+
+**Turn Detection Flow**:
+```
+IDLE --(energy > threshold)--> SPEECH_START --(duration >= min)--> SPEECH_ACTIVE
+SPEECH_ACTIVE --(energy < threshold)--> SILENCE --(silence >= threshold)--> IDLE
+```
+
+**Events**:
+- `speech.start`: Speech detected, turn started (includes turnId)
+- `speech.end`: Speech ended, turn completing (includes duration)
+- `turn.end`: Turn completed (includes turnId)
+- `vad.frame`: Every frame processed (includes energy, isSpeech, state)
+
+**Statistics**:
+- `frameCounter`: Total frames processed
+- `turnsCompleted`: Number of complete turns
+- `totalSpeechDurationMs`: Cumulative speech time
+- `totalSilenceDurationMs`: Cumulative silence time
+- `currentTurnId`: Active turn ID (null if idle)
 
 **Key Features**:
 - Initializes and verifies LiveKit connectivity
@@ -337,7 +436,9 @@ interface CallState {
   - Error handling
 
 ### Test Coverage
-- All 94 tests passing
+- All 144 tests passing (94 existing + 50 new Phase 4 tests)
+  - VAD Service: 31 tests
+  - Audio Pipeline: 19 tests
 - Build: `npm run build` passes
 - Tests: `npm test` passes
 
@@ -389,7 +490,17 @@ interface CallState {
 
 ## Version History
 
-- **v0.2.0** (Current): Phase 3 - LiveKit Integration (In Progress)
+- **v0.3.0** (Current): Phase 4 - VAD Integration
+  - Audio pipeline service for frame processing
+  - Voice Activity Detection (VAD) service with energy-based speech detection
+  - Turn detection with unique turn IDs and state machine
+  - Frame-based timing for reliable testability
+  - Configurable VAD thresholds (energy, silence, min speech duration)
+  - VAD statistics (frame counter, speech duration, turns completed)
+  - 144 unit tests passing (31 VAD + 19 audio pipeline + 94 existing)
+  - Build pipeline passing
+
+- **v0.2.0**: Phase 3 - LiveKit Integration (completed)
   - LiveKit service for room/token management
   - Matrix-LiveKit adapter bridge
   - Async method signature fixes (generateToken, getUserId)

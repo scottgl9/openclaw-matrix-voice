@@ -199,7 +199,14 @@ npm start
 - [ ] STT service integration (Whisper/Vosk)
 - [ ] TTS audio response via WebRTC
 
-### Phase 4 (Future)
+### Phase 4 (Current - VAD Integration)
+- [x] Voice Activity Detection (VAD) service with energy-based speech detection
+- [x] Turn detection with unique turn ID tracking
+- [x] Audio pipeline service for frame processing
+- [x] Frame-based timing for reliable testability
+- [x] Configurable thresholds (energy, silence, min speech duration)
+- [x] Turn statistics (frame counter, speech duration, turns completed)
+- [x] 144 unit tests passing (including 31 VAD tests)
 - [ ] Echo cancellation
 - [ ] Noise suppression
 - [ ] Adaptive bitrate
