@@ -1,4 +1,5 @@
 import { MatrixClient } from 'matrix-bot-sdk';
+import { config } from '../config/index.js';
 import { OpenClawService } from '../services/openclaw-service.js';
 import { ChatterboxTTSService } from '../services/chatterbox-tts-service.js';
 import { MatrixClientService } from '../services/matrix-client-service.js';
@@ -247,22 +248,25 @@ export class VoiceCallHandler {
     console.log('[VoiceCallHandler] Initializing audio pipeline for', roomId);
 
     const pipeline = new AudioPipelineService({
-      sampleRate: 16000,
-      channels: 1,
-      format: 'pcm16',
-      frameDurationMs: 20,
+      sampleRate: config.audio.sampleRate,
+      channels: config.audio.channels,
+      format: config.audio.format,
+      frameDurationMs: config.audio.frameDurationMs,
       loopbackEnabled: false,
       vadEnabled: true,
     });
 
     const vadService = new VadService({
-      energyThreshold: 0.3,
-      silenceThresholdMs: 800,
-      minSpeechDurationMs: 200,
-      preRollMs: 100,
-      postRollMs: 300,
-      frameDurationMs: 20,
-      debug: false,
+      energyThreshold: config.vad.energyThreshold,
+      silenceThresholdMs: config.vad.silenceThresholdMs,
+      minSpeechDurationMs: config.vad.minSpeechDurationMs,
+      preRollMs: config.vad.preRollMs,
+      postRollMs: config.vad.postRollMs,
+      frameDurationMs: config.audio.frameDurationMs,
+      debug: config.vad.debug,
+      adaptiveThreshold: config.vad.adaptiveThreshold,
+      adaptiveMultiplier: config.vad.adaptiveMultiplier,
+      hangoverFrames: config.vad.hangoverFrames,
     });
 
     // Create a per-call TurnProcessor to avoid race conditions between rooms
@@ -310,7 +314,7 @@ export class VoiceCallHandler {
       console.log('[VoiceCallHandler] TTS audio ready');
       try {
         if (callState.livekitAgent && callState.livekitAgent.isConnected()) {
-          await callState.livekitAgent.publishAudioBuffer(event.audioData, 16000);
+          await callState.livekitAgent.publishAudioBuffer(event.audioData, config.audio.sampleRate);
         } else {
           await this.matrixService.sendAudio(roomId, event.audioData, event.mimeType);
         }

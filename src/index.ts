@@ -4,32 +4,33 @@ import { ChatterboxTTSService } from './services/chatterbox-tts-service.js';
 import { createMatrixClientService, MatrixClientService } from './services/matrix-client-service.js';
 import { STTService, MockSTTAdapter } from './services/stt-adapter.js';
 import { WhisperSTTAdapter } from './services/whisper-stt-adapter.js';
+import { HealthServer } from './services/health-server.js';
+import { createLogger } from './utils/logger.js';
+
+const log = createLogger('Main');
 
 async function main(): Promise<void> {
-  console.log('OpenClaw Matrix Voice Call Service');
-  console.log('==================================\n');
+  log.info('OpenClaw Matrix Voice Call Service starting');
 
   // Validate configuration
   try {
     validateConfig();
-    console.log('Configuration validated');
+    log.info('Configuration validated');
   } catch (error: any) {
-    console.error('Configuration error:', error.message);
+    log.error('Configuration error', { error: error.message });
     process.exit(1);
   }
 
   // Initialize services
-  console.log('\nInitializing services...');
+  log.info('Initializing services');
 
   const openClawService = new OpenClawService();
-  console.log('  - OpenClaw API:', config.openclaw.apiUrl);
+  log.info('OpenClaw API configured', { url: config.openclaw.apiUrl });
 
   const ttsService = new ChatterboxTTSService();
-  console.log('  - Chatterbox TTS:', config.chatterbox.ttsUrl);
+  log.info('Chatterbox TTS configured', { url: config.chatterbox.ttsUrl });
 
-  // Initialize STT: use Whisper if configured, otherwise mock
-  console.log('\nInitializing STT...');
-
+  // Initialize STT
   let sttService: STTService;
   if (config.whisper.url) {
     const whisperAdapter = new WhisperSTTAdapter({
@@ -38,39 +39,48 @@ async function main(): Promise<void> {
       language: config.whisper.language,
     });
     sttService = new STTService(whisperAdapter);
-    console.log('  - STT: Whisper at', config.whisper.url);
+    log.info('STT: Whisper', { url: config.whisper.url });
   } else {
     sttService = new STTService(new MockSTTAdapter(['Hello', 'Test transcription', 'Mock response']));
-    console.log('  - STT: Mock (set WHISPER_URL to enable Whisper)');
+    log.info('STT: Mock (set WHISPER_URL to enable Whisper)');
   }
   await sttService.initialize();
-  console.log('  - STT Service: Ready');
 
   // Create Matrix client
-  console.log('\nConnecting to Matrix...');
+  log.info('Connecting to Matrix');
   const matrixService = createMatrixClientService(openClawService, ttsService);
 
   try {
     await matrixService.start();
-    console.log('Matrix client connected\n');
+    log.info('Matrix client connected');
 
-    // Wire STT service to voice call handler (per-call TurnProcessors use this)
     const voiceCallHandler = matrixService.getVoiceCallHandler();
     voiceCallHandler.setSTTService(sttService);
-    console.log('  - STT service wired to voice call handler\n');
+    log.info('STT service wired to voice call handler');
   } catch (error: any) {
-    console.error('Failed to connect to Matrix:', error.message);
+    log.error('Failed to connect to Matrix', { error: error.message });
     process.exit(1);
   }
 
-  // Set up graceful shutdown - drain active calls before exiting
+  // Start health check server
+  const healthServer = new HealthServer(() => ({
+    matrixConnected: matrixService.isRunningStatus(),
+    livekitEnabled: config.livekit.enabled,
+    sttReady: sttService.isRunningFlag(),
+    activeCalls: matrixService.getVoiceCallHandler().getActiveCallCount(),
+    uptime: Math.floor(process.uptime()),
+  }));
+  await healthServer.start(config.server.port, config.server.host);
+
+  // Graceful shutdown
   const shutdown = async (signal: string) => {
-    console.log(`\n${signal} received. Shutting down gracefully...`);
+    log.info(`${signal} received, shutting down gracefully`);
     try {
+      await healthServer.stop();
       await matrixService.stop();
       await sttService.shutdown();
-    } catch (error) {
-      console.error('Error during shutdown:', error);
+    } catch (error: any) {
+      log.error('Error during shutdown', { error: error.message });
     }
     process.exit(0);
   };
@@ -78,8 +88,13 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-  console.log('Service is running. Press Ctrl+C to stop.\n');
-  console.log('Commands:');
+  log.info('Service is running', {
+    healthEndpoint: `http://${config.server.host}:${config.server.port}/healthz`,
+    livekitEnabled: config.livekit.enabled,
+    stt: config.whisper.url ? 'Whisper' : 'Mock',
+    audioSampleRate: config.audio.sampleRate,
+  });
+  console.log('\nCommands:');
   console.log('  /call start         - Start a text-simulated voice call');
   console.log('  /call start livekit - Start a LiveKit voice call');
   console.log('  /call end           - End a voice call');
@@ -87,6 +102,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error('Fatal error:', error);
+  log.error('Fatal error', { error: error.message });
   process.exit(1);
 });

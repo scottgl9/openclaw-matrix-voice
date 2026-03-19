@@ -35,6 +35,19 @@ export interface Config {
   audio: {
     sampleRate: number;
     format: string;
+    frameDurationMs: number;
+    channels: number;
+  };
+  vad: {
+    energyThreshold: number;
+    silenceThresholdMs: number;
+    minSpeechDurationMs: number;
+    preRollMs: number;
+    postRollMs: number;
+    adaptiveThreshold: boolean;
+    adaptiveMultiplier: number;
+    hangoverFrames: number;
+    debug: boolean;
   };
 }
 
@@ -71,8 +84,23 @@ export const config: Config = {
   audio: {
     sampleRate: parseInt(process.env.SAMPLE_RATE || '16000', 10),
     format: process.env.AUDIO_FORMAT || 'pcm16',
+    frameDurationMs: parseInt(process.env.FRAME_DURATION_MS || '20', 10),
+    channels: parseInt(process.env.AUDIO_CHANNELS || '1', 10),
+  },
+  vad: {
+    energyThreshold: parseFloat(process.env.VAD_ENERGY_THRESHOLD || '0.3'),
+    silenceThresholdMs: parseInt(process.env.VAD_SILENCE_THRESHOLD_MS || '800', 10),
+    minSpeechDurationMs: parseInt(process.env.VAD_MIN_SPEECH_MS || '200', 10),
+    preRollMs: parseInt(process.env.VAD_PRE_ROLL_MS || '100', 10),
+    postRollMs: parseInt(process.env.VAD_POST_ROLL_MS || '300', 10),
+    adaptiveThreshold: process.env.VAD_ADAPTIVE_THRESHOLD === 'true',
+    adaptiveMultiplier: parseFloat(process.env.VAD_ADAPTIVE_MULTIPLIER || '3.0'),
+    hangoverFrames: parseInt(process.env.VAD_HANGOVER_FRAMES || '0', 10),
+    debug: process.env.VAD_DEBUG === 'true',
   },
 };
+
+const VALID_SAMPLE_RATES = [8000, 16000, 22050, 44100, 48000];
 
 export function validateConfig(): void {
   const errors: string[] = [];
@@ -98,6 +126,28 @@ export function validateConfig(): void {
     if (!config.livekit.apiSecret) {
       errors.push('LIVEKIT_API_SECRET is required when LIVEKIT_ENABLED=true');
     }
+  }
+
+  // Validate audio format
+  if (config.audio.format !== 'pcm16') {
+    errors.push(`Unsupported audio format "${config.audio.format}" - only "pcm16" is supported`);
+  }
+  if (!VALID_SAMPLE_RATES.includes(config.audio.sampleRate)) {
+    errors.push(`Invalid sample rate ${config.audio.sampleRate} - valid: ${VALID_SAMPLE_RATES.join(', ')}`);
+  }
+  if (config.audio.channels < 1 || config.audio.channels > 2) {
+    errors.push(`Invalid channel count ${config.audio.channels} - must be 1 or 2`);
+  }
+  if (config.audio.frameDurationMs < 5 || config.audio.frameDurationMs > 100) {
+    errors.push(`Invalid frame duration ${config.audio.frameDurationMs}ms - must be 5-100`);
+  }
+
+  // Validate VAD config
+  if (config.vad.energyThreshold < 0 || config.vad.energyThreshold > 1) {
+    errors.push(`VAD energy threshold ${config.vad.energyThreshold} must be 0-1`);
+  }
+  if (config.vad.silenceThresholdMs < 100) {
+    errors.push(`VAD silence threshold ${config.vad.silenceThresholdMs}ms must be >= 100`);
   }
 
   if (errors.length > 0) {
