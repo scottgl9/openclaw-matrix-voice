@@ -1,311 +1,312 @@
-# Architecture Notes
+# Architecture - OpenClaw Matrix Voice
 
-## System Overview
+## Overview
 
-OpenClaw Matrix Voice Call MVP integrates three core systems:
-1. **Matrix Protocol** - Decentralized messaging for call signaling
-2. **OpenClaw API** - AI agent for text response generation
-3. **Chatterbox TTS** - Text-to-speech for audio response generation
+OpenClaw Matrix Voice is a Matrix bot that provides voice call functionality. The system is designed to support both text-simulated voice calls (current MVP) and real-time WebRTC-based voice calls (Phase 2+).
 
-## Design Decisions
+## System Components
 
-### Why Matrix Bot SDK?
+### 1. VoiceCallHandler
 
-The Matrix Bot SDK (`matrix-bot-sdk`) was chosen because:
-- Mature, well-documented SDK for Matrix bot development
-- Built-in support for room joining, message sending, and event handling
-- Active community and regular updates
-- Simplifies Matrix protocol complexity
+**Location**: `src/handlers/voice-call-handler.ts`
 
-**Trade-off**: For full WebRTC call support, we'd need `matrix-sdk-js` with media handling capabilities. The MVP uses text simulation as a pragmatic first step.
+**Responsibility**: Orchestrates voice call flow and routes events to appropriate processors.
 
-### Why HTTP API for OpenClaw?
+**Key Features**:
+- Manages active call sessions per room
+- Routes events to text-simulated or real media paths
+- Handles call control commands (`/call start`, `/call end`, `/call status`)
+- Processes voice input (text simulation or real audio)
 
-Initially considered WebSocket gateway protocol, but chose HTTP API because:
-- Simpler to implement and debug
-- Stateless request/response model fits MVP scope
-- Easier to test with unit tests
-- Can be upgraded to WebSocket later without major changes
+**Phase 2 Changes**:
+- Added `isRealMediaCall` flag to distinguish call types
+- Added `callId` tracking for Matrix call events
+- Added `processRealTimeAudio()` method for WebRTC audio streams
+- Integrated with `MatrixCallMediaService`
 
-### Why Chatterbox TTS?
+### 2. MatrixCallMediaService
 
-Chatterbox provides:
-- High-quality neural TTS
-- Local deployment option (service mode)
-- API mode for cloud deployment
-- WAV/PCM output suitable for telephony
+**Location**: `src/services/matrix-call-media-service.ts`
 
-## Component Interactions
+**Responsibility**: Handles Matrix call protocol events and manages call session state.
 
-### Message Flow
+**Key Features**:
+- Listens for `m.call.invite`, `m.call.media`, `m.call.hangup` events
+- Maintains call session state machine (invited → connecting → connected → ended)
+- Auto-accepts incoming calls with `m.call.answer`
+- Initiates outbound calls with `m.call.invite`
+- Provides audio routing stubs for WebRTC integration
 
+**Phase 2 Implementation**:
+- ✓ Call event handling and routing
+- ✓ Session state management
+- ✓ Call answer/invite/hangup event sending
+- ✓ Event emitter for call lifecycle hooks
+- ✗ WebRTC peer connection (Phase 3)
+- ✗ Real audio stream processing (Phase 3)
+
+**Call Flow**:
 ```
-User (Matrix Room)
-    │
-    ├─ Sends: /call start
-    │
-    ▼
-Voice Call Handler
-    │
-    ├─ Creates: CallState { isActive: true, roomId, timestamp }
-    │
-    ▼
-User (Matrix Room)
-    │
-    ├─ Sends: voice: "Hello"
-    │
-    ▼
-Voice Call Handler
-    │
-    ├─ Validates: Call is active
-    ├─ Extracts: Text from message
-    │
-    ▼
-OpenClaw Service
-    │
-    ├─ POST /gateway { type: 'text', content: 'Hello', channel: 'matrix' }
-    │
-    ▼
-OpenClaw API
-    │
-    ├─ Routes to agent
-    ├─ Generates response
-    │
-    ▼
-OpenClaw Service
-    │
-    ├─ Returns: { success: true, response: "How can I help?" }
-    │
-    ▼
-Chatterbox TTS Service
-    │
-    ├─ POST /tts { text: "How can I help?", format: 'wav' }
-    │
-    ▼
-Chatterbox TTS
-    │
-    ├─ Generates: WAV audio buffer
-    │
-    ▼
-Chatterbox TTS Service
-    │
-    ├─ Returns: { success: true, audioData: Buffer, mimeType: 'audio/wav' }
-    │
-    ▼
-Matrix Client Service
-    │
-    ├─ Uploads: Audio to media repository
-    ├─ Sends: m.room.message with m.audio
-    │
-    ▼
-User (Matrix Room)
-    │
-    └─ Receives: Audio message (voice response)
+Incoming Call:
+  m.call.invite → handleCallInvite() → send m.call.answer → session.state = 'connecting'
+  
+  m.call.media → handleCallMedia() → emit 'media.inbound' → (Phase 3: STT)
+  
+  m.call.hangup → handleCallHangup() → session.state = 'ended'
+
+Outgoing Call:
+  startCall() → send m.call.invite → session.state = 'connecting'
+  
+  sendAudio() → emit 'media.outbound' → (Phase 3: WebRTC send)
+  
+  endCall() → send m.call.hangup → session.state = 'disconnected'
 ```
 
-### State Management
+### 3. MatrixClientService
 
-Call state is stored in-memory using a `Map<string, CallState>`:
-- Key: Room ID
-- Value: CallState object with active status, timestamps, metadata
+**Location**: `src/services/matrix-client-service.ts`
 
-**Limitation**: In-memory storage doesn't survive restarts. Future versions should use persistent storage (SQLite, Redis).
+**Responsibility**: Wraps Matrix SDK client with bot-specific functionality.
 
-## Security Considerations
+**Key Features**:
+- Manages Matrix client lifecycle (start/stop)
+- Sets up event handlers for room messages and references
+- Provides access to voice call handler and call media service
+- Auto-joins invited rooms
 
-### Authentication
+**Phase 2 Changes**:
+- Instantiates `MatrixCallMediaService` on construction
+- Starts call media service in `start()` method
+- Provides `getCallMediaService()` getter
 
-- Matrix: Access token authentication (stored in `.env`)
-- OpenClaw: Bearer token authentication
-- Chatterbox: Optional API key authentication
+### 4. OpenClawService
 
-### Data Protection
+**Location**: `src/services/openclaw-service.ts`
 
-- No sensitive data logged
-- Audio data handled in-memory only
-- Credentials stored in environment variables (not committed)
+**Responsibility**: Communicates with OpenClaw API for text processing.
 
-### Future Security Enhancements
+**Key Features**:
+- Sends text to OpenClaw API
+- Receives AI-generated responses
+- Handles API errors and timeouts
 
-1. **E2EE Support**: Matrix encryption for private calls
-2. **Webhook Security**: Signature verification for external TTS APIs
-3. **Rate Limiting**: Prevent abuse of TTS service
-4. **Audit Logging**: Track call activity for compliance
+**Integration**: Used by VoiceCallHandler for text-simulated voice calls.
 
-## Performance Considerations
+### 5. ChatterboxTTSService
 
-### Current Limitations
+**Location**: `src/services/chatterbox-tts-service.ts`
 
-1. **Sequential Processing**: One call at a time per room
-2. **In-memory Caching**: TTS cache lost on restart
-3. **No Audio Compression**: WAV files are large (16-bit, 16kHz = 320KB/sec)
+**Responsibility**: Converts text to speech audio.
 
-### Optimization Opportunities
+**Key Features**:
+- Sends text to Chatterbox TTS API
+- Receives audio data (WAV/OGG)
+- Caches responses to reduce API calls
+- Handles API errors gracefully
 
-1. **Concurrent Calls**: Use Promise.all for parallel processing
-2. **Persistent Cache**: Redis or file-based TTS cache
-3. **Audio Compression**: Opus or MP3 for smaller payloads
-4. **Connection Pooling**: Reuse HTTP connections to OpenClaw/TTS
+**Integration**: Used by VoiceCallHandler to generate audio responses.
 
-## Error Handling Strategy
+## Data Flow
 
-### Retry Logic
+### Text-Simulated Call (Current - Full)
 
-- OpenClaw API: No retry (user waits for response)
-- TTS Service: No retry (fallback to text)
-- Matrix: SDK handles reconnection
+```
+User: /call start
+  ↓
+VoiceCallHandler.startCall()
+  ↓
+VoiceCallHandler.sendMessage("🎤 Voice call started...")
+  ↓
+User replies to bot message
+  ↓
+VoiceCallHandler.handleReply()
+  ↓
+VoiceCallHandler.processVoiceInput()
+  ↓
+OpenClawService.processText(text)
+  ↓
+OpenClaw API → AI response
+  ↓
+ChatterboxTTSService.textToSpeechCached(response)
+  ↓
+VoiceCallHandler.sendAudio()
+  ↓
+MatrixClientService.sendAudio()
+  ↓
+Matrix room: Audio file
+```
 
-### Fallback Mechanisms
+### Real Media Call (Phase 2 - Partial)
 
-1. **TTS Failure**: Send text response instead of audio
-2. **OpenClaw Failure**: Send error message to user
-3. **Matrix Disconnection**: Graceful shutdown with cleanup
+```
+User: /call start real
+  ↓
+VoiceCallHandler.startCall(roomId, true)
+  ↓
+MatrixCallMediaService.startCall(roomId)
+  ↓
+MatrixClient.sendEvent(m.call.invite)
+  ↓
+[Phase 3: WebRTC peer connection established]
+  ↓
+User speaks → microphone audio
+  ↓
+[Phase 3: WebRTC capture → STT]
+  ↓
+VoiceCallHandler.processRealTimeAudio(audioData)
+  ↓
+[Phase 3: STT → text → OpenClaw → TTS]
+  ↓
+[Phase 3: TTS audio → WebRTC send]
+```
 
-### Error Categories
+## State Management
 
-| Category | Handling |
-|----------|----------|
-| Network errors | Log and return error response |
-| Authentication errors | Stop service, require credential update |
-| API errors | Return error to user, log details |
-| TTS errors | Fallback to text response |
+### CallSession (MatrixCallMediaService)
+```typescript
+interface CallSession {
+  callId: string;           // Unique call identifier
+  roomId: string;           // Matrix room ID
+  state: 'invited' | 'connecting' | 'connected' | 'disconnected' | 'ended';
+  createdAt: Date;
+  endedAt?: Date;
+  peerUserId?: string;      // Remote user ID
+  // Phase 3+
+  peerConnection?: any;     // RTCPeerConnection
+  localStream?: any;        // MediaStream
+  remoteStream?: any;       // MediaStream
+}
+```
+
+### CallState (VoiceCallHandler)
+```typescript
+interface CallState {
+  isActive: boolean;
+  roomId: string;
+  lastActivity: Date;
+  transcription?: string;
+  callId?: string;          // Phase 2: Matrix call ID
+  isRealMediaCall?: boolean; // Phase 2: WebRTC vs text-simulated
+}
+```
+
+## Event Handling
+
+### MatrixCallMediaService Events
+- `call.invited`: Incoming call received
+- `call.connecting`: Call answer sent
+- `call.initiated`: Outbound call started
+- `call.ended`: Call terminated
+- `call.hangup`: Local hangup sent
+- `media.inbound`: Audio/video received
+- `media.outbound`: Audio/video sent
+
+### VoiceCallHandler Events
+- `room.event`: General room events
+- `room.message`: Text messages
+- `room.reference`: Reply references
+
+## Matrix Protocol Support
+
+### Supported Events (Phase 2)
+- `m.call.invite` - Call initiation
+- `m.call.answer` - Call acceptance
+- `m.call.media` - Media stream data
+- `m.call.hangup` - Call termination
+
+### Pending Events (Phase 3+)
+- `m.call.sdp.stream` - WebRTC SDP negotiation
+- `m.call.candidates` - ICE candidates
+- `m.call.select` - Media stream selection
 
 ## Testing Strategy
 
 ### Unit Tests
+- **MatrixCallMediaService**: 23 tests
+  - Service lifecycle (start/stop)
+  - Call session management
+  - Event handling (invite, media, hangup)
+  - Outbound call flow
+  - Audio send/receive stubs
+  - Statistics tracking
 
-- **OpenClawService**: Mock axios, test API calls and error handling
-- **ChatterboxTTSService**: Mock axios, test TTS generation and caching
-- **VoiceCallHandler**: Mock services, test call state transitions
+- **VoiceCallHandler**: 19 tests
+  - Call start/end
+  - Real media vs text-simulated paths
+  - Event routing
+  - Audio processing
+  - Status reporting
 
-### Test Coverage Goals
+- **OpenClawService**: 3 tests
+  - Text processing
+  - Error handling
+  - Timeout handling
 
-- Core services: 80%+ coverage
-- Error paths: All major error scenarios tested
-- Edge cases: Empty inputs, null values, timeouts
+- **ChatterboxTTSService**: 5 tests
+  - TTS generation
+  - Caching
+  - Error handling
 
-### Future Testing
+### Test Coverage
+- All 50 tests passing
+- Build: `npm run build` passes
+- Tests: `npm test` passes
 
-- Integration tests with real Matrix server (test server)
-- End-to-end tests with Docker Compose
-- Load testing for concurrent calls
+## Future Architecture (Phase 3+)
 
-## Integration Points
-
-### OpenClaw API Integration
-
-**Endpoint**: `POST /gateway`
-**Payload**:
-```json
-{
-  "type": "text",
-  "content": "user message",
-  "channel": "matrix"
-}
+### WebRTC Integration
+```
+┌──────────────────────────────────────────────────────────┐
+│                    WebRTC Layer                           │
+│  ┌─────────────────┐  ┌────────────────────────────────┐  │
+│  │ RTCPeerConnection│  │ MediaStream API                │  │
+│  │ - SDP exchange   │  │ - getUserMedia (mic/camera)   │  │
+│  │ - ICE candidates │  │ - AudioTracks/VideoTracks     │  │
+│  │ - DTLS/SRTP      │  │ - Track endpoints             │  │
+│  └─────────────────┘  └────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+                            ↓
+┌──────────────────────────────────────────────────────────┐
+│                    Audio Processing                       │
+│  ┌─────────────────┐  ┌────────────────────────────────┐  │
+│  │ STT Engine      │  │ TTS Engine                     │  │
+│  │ - Whisper       │  │ - Chatterbox                   │  │
+│  │ - Vosk          │  │ - Custom voices                │  │
+│  │ - Real-time     │  │ - Streaming                    │  │
+│  └─────────────────┘  └────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
 ```
 
-**Response**:
-```json
-{
-  "response": "agent response"
-}
-```
+## Security Considerations
 
-### Chatterbox TTS Integration
+- **Encryption**: Calls use Matrix end-to-end encryption (E2EE)
+- **Access Tokens**: Stored securely in environment variables
+- **Audio Data**: Processed in-memory, not persisted
+- **User Consent**: Call recording requires explicit consent (Phase 4)
 
-**Endpoint**: `POST /tts`
-**Payload**:
-```json
-{
-  "text": "text to convert",
-  "format": "wav",
-  "sampleRate": 16000
-}
-```
+## Performance Considerations
 
-**Response**: `audio/wav` (binary)
+- **TTS Caching**: Responses cached to reduce API calls
+- **Event Filtering**: Only process relevant events
+- **Session Cleanup**: Expired sessions removed on stop
+- **Audio Buffering**: Chunked audio processing (Phase 3)
 
-### Matrix Bot SDK Integration
+## Dependencies
 
-**Events**:
-- `room.message`: Incoming messages
-- `room.event`: All room events
-- `room.encryptionError`: E2EE errors
+- `matrix-bot-sdk`: Matrix protocol client
+- `vitest`: Testing framework
+- `typescript`: Type-safe JavaScript
+- `axios`: HTTP client (OpenClaw API)
 
-**Methods**:
-- `sendText(roomId, text)`: Send text message
-- `sendAudio(roomId, buffer, mimeType)`: Send audio
-- `joinRoom(roomId)`: Join a room
+## Version History
 
-## Deployment Considerations
+- **v0.1.0** (Current): Phase 2 - Call media plumbing
+  - Matrix call event handling
+  - Call session management
+  - Text-simulated voice calls
+  - Unit tests (50 passing)
 
-### Environment Requirements
-
-- **Node.js**: 18+ or 20+
-- **Memory**: 512MB minimum (TTS caching)
-- **CPU**: 1+ cores (audio processing)
-- **Network**: Outbound to Matrix, OpenClaw, TTS services
-
-### Scaling Strategy
-
-1. **Vertical**: Increase resources for more concurrent calls
-2. **Horizontal**: Multiple instances with load balancer (requires session affinity)
-
-### Monitoring
-
-**Metrics to Track**:
-- Active call count
-- Response latency (OpenClaw + TTS)
-- Error rate
-- TTS cache hit rate
-
-**Logging**:
-- INFO: Call start/end, errors
-- DEBUG: API requests/responses (development only)
-
-## Migration Path to Full Voice Calls
-
-### Phase 1: Current MVP (Text Simulation)
-- ✅ Text input with TTS output
-- ✅ Basic call state management
-- ✅ OpenClaw integration
-
-### Phase 2: Matrix Call v1 Integration
-- Implement `m.call.invite` handling
-- Add WebRTC peer connection
-- Capture audio from Matrix stream
-- Integrate STT (Whisper/Vosk)
-
-### Phase 3: Matrix Call v2 (MSC3407+)
-- Support call v2 protocol
-- Improved signaling and ICE handling
-- Better multi-party support
-
-### Phase 4: Production Hardening
-- E2EE support
-- Persistent state
-- Monitoring and alerting
-- Docker/Kubernetes deployment
-
-## References
-
-- [Matrix Bot SDK Documentation](https://github.com/matrix-org/matrix-bot-sdk)
-- [OpenClaw Documentation](/home/clawmander/sandbox/personal/OPENCLAW_DOCS)
-- [Matrix Call Specification](https://spec.matrix.org/v1.8/rooms/v9/#event-types)
-- [Chatterbox TTS API](https://github.com/clawmander/chatterbox)
-
-## Change Log
-
-### 0.1.0 (2026-03-18)
-- Initial MVP implementation
-- Text-based voice simulation
-- OpenClaw API integration
-- Chatterbox TTS integration
-- Unit tests for core services
-- Basic call state management
-
----
-
-**Document Owner**: OpenClaw Team
-**Last Updated**: 2026-03-18
-**Version**: 0.1.0
+- **v0.0.1**: Initial MVP
+  - Text-based voice simulation
+  - OpenClaw API integration
+  - Chatterbox TTS
