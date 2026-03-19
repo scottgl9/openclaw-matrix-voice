@@ -17,6 +17,12 @@ export interface Config {
     ttsUrl: string;
     apiKey?: string;
   };
+  livekit: {
+    enabled: boolean;
+    url: string;
+    apiKey: string;
+    apiSecret: string;
+  };
   server: {
     port: number;
     host: string;
@@ -42,6 +48,12 @@ export const config: Config = {
     ttsUrl: process.env.CHATTERBOX_TTS_URL || 'http://localhost:8000/tts',
     apiKey: process.env.CHATTERBOX_TTS_API_KEY,
   },
+  livekit: {
+    enabled: process.env.LIVEKIT_ENABLED === 'true',
+    url: process.env.LIVEKIT_URL || 'ws://localhost:7880',
+    apiKey: process.env.LIVEKIT_API_KEY || '',
+    apiSecret: process.env.LIVEKIT_API_SECRET || '',
+  },
   server: {
     port: parseInt(process.env.SERVER_PORT || '3000', 10),
     host: process.env.SERVER_HOST || '0.0.0.0',
@@ -63,6 +75,19 @@ export function validateConfig(): void {
   }
   if (!config.openclaw.apiToken) {
     errors.push('OPENCLAW_API_TOKEN is required');
+  }
+  
+  // Validate LiveKit config if enabled
+  if (config.livekit.enabled) {
+    if (!config.livekit.url) {
+      errors.push('LIVEKIT_URL is required when LIVEKIT_ENABLED=true');
+    }
+    if (!config.livekit.apiKey) {
+      errors.push('LIVEKIT_API_KEY is required when LIVEKIT_ENABLED=true');
+    }
+    if (!config.livekit.apiSecret) {
+      errors.push('LIVEKIT_API_SECRET is required when LIVEKIT_ENABLED=true');
+    }
   }
 
   if (errors.length > 0) {

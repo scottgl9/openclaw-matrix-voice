@@ -46,6 +46,7 @@ describe('VoiceCallHandler', () => {
       sendMessage: vi.fn().mockResolvedValue({}),
       sendAudio: vi.fn().mockResolvedValue({}),
       getCallMediaService: vi.fn().mockReturnValue(mockCallMediaService),
+      getLiveKitAdapter: vi.fn().mockReturnValue(null), // No LiveKit adapter in tests
     } as unknown as MatrixClientService;
 
     handler = new VoiceCallHandler(
@@ -208,6 +209,7 @@ describe('VoiceCallHandler', () => {
         sendMessage: vi.fn().mockResolvedValue({}),
         sendAudio: vi.fn().mockResolvedValue({}),
         getCallMediaService: vi.fn().mockReturnValue(mockCallMediaService),
+        getLiveKitAdapter: vi.fn().mockReturnValue(null),
       } as unknown as MatrixClientService;
 
       const handler2 = new VoiceCallHandler(
@@ -238,6 +240,7 @@ describe('VoiceCallHandler', () => {
         sendMessage: vi.fn().mockResolvedValue({}),
         sendAudio: vi.fn().mockResolvedValue({}),
         getCallMediaService: vi.fn().mockReturnValue(mockCallMediaService),
+        getLiveKitAdapter: vi.fn().mockReturnValue(null),
       } as unknown as MatrixClientService;
 
       const handler2 = new VoiceCallHandler(

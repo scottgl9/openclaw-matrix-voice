@@ -117,7 +117,7 @@ export class VoiceCallHandler {
 
   /**
    * Start a voice call in a room
-   * Phase 2: Support both text-simulated and real media calls
+   * Phase 2/3: Support text-simulated, WebRTC, and LiveKit calls
    */
   async startCall(roomId: string, useRealMedia = false): Promise<void> {
     console.log(`Starting voice call in ${roomId} (real media: ${useRealMedia})`);
@@ -130,23 +130,52 @@ export class VoiceCallHandler {
     };
 
     if (useRealMedia) {
-      // Phase 2: Use call media service for real WebRTC-based calls
-      try {
-        const callId = await this.callMediaService.startCall(roomId);
-        callState.callId = callId;
-        console.log(`[VoiceCallHandler] Real media call started: ${callId}`);
-      } catch (error) {
-        console.error('[VoiceCallHandler] Error starting real media call:', error);
-        // Fallback to text-simulated call
-        callState.isRealMediaCall = false;
+      // Phase 3: Try LiveKit first, fall back to WebRTC/Matrix call
+      const liveKitAdapter = this.matrixService.getLiveKitAdapter();
+      
+      if (liveKitAdapter && liveKitAdapter.isLiveKitAvailable()) {
+        try {
+          // Use LiveKit for real media call
+          const userId = await this.matrixService.getClient().getUserId();
+          const result = await liveKitAdapter.startCall(roomId, userId);
+          
+          if (result.success) {
+            callState.callId = `livekit_${Date.now()}`;
+            console.log(`[VoiceCallHandler] LiveKit call started in ${roomId}`);
+          } else {
+            console.warn('[VoiceCallHandler] LiveKit start failed:', result.error);
+            // Fall through to Matrix call fallback
+          }
+        } catch (error: any) {
+          console.error('[VoiceCallHandler] Error starting LiveKit call:', error.message);
+          // Fall through to Matrix call fallback
+        }
+      }
+
+      // Fallback: Use call media service for WebRTC-based calls
+      if (!callState.callId) {
+        try {
+          const callId = await this.callMediaService.startCall(roomId);
+          callState.callId = callId;
+          console.log(`[VoiceCallHandler] Matrix call started: ${callId}`);
+        } catch (error) {
+          console.error('[VoiceCallHandler] Error starting real media call:', error);
+          // Fallback to text-simulated call
+          callState.isRealMediaCall = false;
+        }
       }
     }
 
     this.activeCalls.set(roomId, callState);
 
-    const message = useRealMedia 
-      ? '🎤 Real voice call started. I\'m listening...'
-      : '🎤 Voice call started. Speak clearly and I\'ll respond.';
+    let message = '🎤 Voice call started. Speak clearly and I\'ll respond.';
+    if (useRealMedia) {
+      if (callState.callId?.startsWith('livekit_')) {
+        message = '🎤 LiveKit voice call started. I\'m listening...';
+      } else {
+        message = '🎤 Real voice call started (Matrix/WebRTC). I\'m listening...';
+      }
+    }
     
     await this.matrixService.sendMessage(roomId, message);
   }
@@ -161,8 +190,20 @@ export class VoiceCallHandler {
     if (callState) {
       callState.isActive = false;
       
-      // Phase 2: End real media call if active
-      if (callState.isRealMediaCall && callState.callId) {
+      // Phase 3: End LiveKit call if active
+      if (callState.isRealMediaCall && callState.callId?.startsWith('livekit_')) {
+        const liveKitAdapter = this.matrixService.getLiveKitAdapter();
+        if (liveKitAdapter) {
+          try {
+            await liveKitAdapter.endCall(roomId);
+          } catch (error) {
+            console.error('[VoiceCallHandler] Error ending LiveKit call:', error);
+          }
+        }
+      }
+      
+      // Phase 2: End Matrix/WebRTC call if active
+      if (callState.isRealMediaCall && !callState.callId?.startsWith('livekit_')) {
         try {
           await this.callMediaService.endCall(roomId);
         } catch (error) {

@@ -4,11 +4,15 @@ import { OpenClawService } from './openclaw-service.js';
 import { ChatterboxTTSService } from './chatterbox-tts-service.js';
 import { VoiceCallHandler } from '../handlers/voice-call-handler.js';
 import { MatrixCallMediaService } from './matrix-call-media-service.js';
+import { LiveKitService } from './livekit-service.js';
+import { MatrixLiveKitAdapter } from './matrix-livekit-adapter.js';
 
 export class MatrixClientService {
   private client: MatrixClient;
   private voiceCallHandler: VoiceCallHandler;
   private callMediaService: MatrixCallMediaService;
+  private liveKitService: LiveKitService | null;
+  private liveKitAdapter: MatrixLiveKitAdapter | null;
   private isRunning = false;
 
   constructor(
@@ -23,6 +27,24 @@ export class MatrixClientService {
     
     // Create call media service first
     this.callMediaService = new MatrixCallMediaService(this.client);
+    
+    // Initialize LiveKit services if enabled
+    this.liveKitService = null;
+    this.liveKitAdapter = null;
+    
+    if (config.livekit.enabled) {
+      this.liveKitService = new LiveKitService({
+        url: config.livekit.url,
+        apiKey: config.livekit.apiKey,
+        apiSecret: config.livekit.apiSecret,
+      });
+      
+      this.liveKitAdapter = new MatrixLiveKitAdapter(this.client, {
+        liveKitEnabled: true,
+        liveKitService: this.liveKitService,
+        fallbackToText: true, // Always allow fallback to text-simulated calls
+      });
+    }
     
     // Create handler after client is initialized
     this.voiceCallHandler = new VoiceCallHandler(this, openClawService, ttsService, this.callMediaService);
@@ -43,6 +65,13 @@ export class MatrixClientService {
     // Start call media service (Phase 2)
     await this.callMediaService.start();
 
+    // Start LiveKit service if enabled (Phase 3)
+    if (this.liveKitService && this.liveKitAdapter) {
+      await this.liveKitService.start();
+      await this.liveKitAdapter.initialize();
+      console.log('LiveKit adapter initialized');
+    }
+
     // Start syncing
     await this.client.start();
     this.isRunning = true;
@@ -57,6 +86,12 @@ export class MatrixClientService {
   stop(): void {
     console.log('Stopping Matrix client...');
     this.callMediaService.stop();
+    
+    // Stop LiveKit service if running
+    if (this.liveKitService) {
+      this.liveKitService.stop();
+    }
+    
     this.client.stop();
     this.isRunning = false;
   }
@@ -87,6 +122,20 @@ export class MatrixClientService {
    */
   getVoiceCallHandler(): VoiceCallHandler {
     return this.voiceCallHandler;
+  }
+
+  /**
+   * Get the LiveKit service (Phase 3)
+   */
+  getLiveKitService(): LiveKitService | null {
+    return this.liveKitService;
+  }
+
+  /**
+   * Get the LiveKit adapter (Phase 3)
+   */
+  getLiveKitAdapter(): MatrixLiveKitAdapter | null {
+    return this.liveKitAdapter;
   }
 
   /**
