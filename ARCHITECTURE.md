@@ -14,7 +14,7 @@ OpenClaw Matrix Voice is a Matrix bot that provides voice call functionality. Th
 
 **Key Features**:
 - Manages active call sessions per room
-- Routes events to text-simulated or real media paths
+- Routes events to text-simulated, real media, or LiveKit paths
 - Handles call control commands (`/call start`, `/call end`, `/call status`)
 - Processes voice input (text simulation or real audio)
 
@@ -23,6 +23,10 @@ OpenClaw Matrix Voice is a Matrix bot that provides voice call functionality. Th
 - Added `callId` tracking for Matrix call events
 - Added `processRealTimeAudio()` method for WebRTC audio streams
 - Integrated with `MatrixCallMediaService`
+
+**Phase 3 Changes**:
+- Added `getLiveKitAdapter()` method to access LiveKit bridge
+- Await `getUserId()` call (async method signature fix)
 
 ### 2. MatrixCallMediaService
 
@@ -71,13 +75,16 @@ Outgoing Call:
 **Key Features**:
 - Manages Matrix client lifecycle (start/stop)
 - Sets up event handlers for room messages and references
-- Provides access to voice call handler and call media service
+- Provides access to voice call handler, call media service, and LiveKit adapter
 - Auto-joins invited rooms
 
 **Phase 2 Changes**:
 - Instantiates `MatrixCallMediaService` on construction
 - Starts call media service in `start()` method
 - Provides `getCallMediaService()` getter
+
+**Phase 3 Changes**:
+- Added `getLiveKitAdapter()` getter for LiveKit bridge access
 
 ### 4. OpenClawService
 
@@ -105,6 +112,69 @@ Outgoing Call:
 - Handles API errors gracefully
 
 **Integration**: Used by VoiceCallHandler to generate audio responses.
+
+### 6. LiveKitService
+
+**Location**: `src/services/livekit-service.ts`
+
+**Responsibility**: Manages LiveKit server connections, rooms, and tokens.
+
+**Key Features**:
+- Connects to LiveKit server via WebSocket
+- Creates/deletes/list rooms for Matrix calls
+- Generates JWT access tokens for participants
+- Tracks room-to-Matrix-room mappings
+- Provides statistics and room retrieval
+
+**Phase 3 Implementation**:
+- ✓ Room creation with auto-generated names
+- ✓ Room deletion and cleanup
+- ✓ Room listing
+- ✓ Participant tracking (add/remove)
+- ✓ JWT token generation with `livekit-server-sdk`
+- ✓ Service lifecycle (start/stop)
+- ✓ Statistics tracking
+
+**Async Methods**:
+- `createRoom(matrixRoomId: string): Promise<LiveKitRoom>`
+- `deleteRoom(matrixRoomId: string): Promise<void>`
+- `listRooms(): Promise<LiveKitRoom[]>`
+- `generateToken(roomName, identity, canPublish, canSubscribe): Promise<string>`
+
+**Integration**: Used by MatrixLiveKitAdapter for room management and token generation.
+
+### 7. MatrixLiveKitAdapter
+
+**Location**: `src/services/matrix-livekit-adapter.ts`
+
+**Responsibility**: Bridges Matrix calls with LiveKit rooms.
+
+**Key Features**:
+- Initializes and verifies LiveKit connectivity
+- Starts calls by creating LiveKit rooms
+- Ends calls by deleting LiveKit rooms
+- Generates participant tokens
+- Tracks active connections and durations
+- Emits events for call lifecycle
+- Falls back to text mode when LiveKit unavailable
+
+**Phase 3 Implementation**:
+- ✓ Adapter initialization with connectivity check
+- ✓ Call start via LiveKit room creation
+- ✓ Call end via LiveKit room deletion
+- ✓ Token generation for participants
+- ✓ Connection state tracking
+- ✓ Event emission (call.started, call.ended, media.inbound, media.outbound)
+- ✓ Fallback mode when LiveKit disabled/unavailable
+- ✓ Statistics and connection retrieval
+
+**Async Methods**:
+- `initialize(): Promise<void>`
+- `startCall(matrixRoomId, userId): Promise<CallResult>`
+- `endCall(matrixRoomId): Promise<void>`
+- `handleOutboundAudio(matrixRoomId, audioData, mimeType): Promise<void>`
+
+**Integration**: Used by VoiceCallHandler for LiveKit-based calls.
 
 ## Data Flow
 
@@ -236,6 +306,25 @@ interface CallState {
   - Event routing
   - Audio processing
   - Status reporting
+  - LiveKit adapter integration
+
+- **LiveKitService**: 22 tests
+  - Service lifecycle (start/stop)
+  - Room creation with auto-generated names
+  - Room deletion and cleanup
+  - Room listing
+  - Participant tracking
+  - JWT token generation
+  - Statistics tracking
+
+- **MatrixLiveKitAdapter**: 22 tests
+  - Adapter initialization
+  - LiveKit connectivity verification
+  - Call start/end via LiveKit
+  - Event emission
+  - Fallback mode
+  - Connection state tracking
+  - Statistics
 
 - **OpenClawService**: 3 tests
   - Text processing
@@ -248,7 +337,7 @@ interface CallState {
   - Error handling
 
 ### Test Coverage
-- All 50 tests passing
+- All 94 tests passing
 - Build: `npm run build` passes
 - Tests: `npm test` passes
 
@@ -300,7 +389,14 @@ interface CallState {
 
 ## Version History
 
-- **v0.1.0** (Current): Phase 2 - Call media plumbing
+- **v0.2.0** (Current): Phase 3 - LiveKit Integration (In Progress)
+  - LiveKit service for room/token management
+  - Matrix-LiveKit adapter bridge
+  - Async method signature fixes (generateToken, getUserId)
+  - Unit tests (94 passing)
+  - Build pipeline passing
+
+- **v0.1.0**: Phase 2 - Call media plumbing
   - Matrix call event handling
   - Call session management
   - Text-simulated voice calls

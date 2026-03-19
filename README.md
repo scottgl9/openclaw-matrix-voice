@@ -1,12 +1,12 @@
 # OpenClaw Matrix Voice
 
-Matrix bot with voice call support using the Matrix SDK.
+Matrix bot with voice call support using the Matrix SDK and LiveKit.
 
-## Status: Phase 2 - Call Media Plumbing
+## Status: Phase 3 - LiveKit Integration (In Progress)
 
 This project is implementing real Matrix voice call support in phases:
 
-### Phase 2 (Current - Implemented ✓)
+### Phase 2 (Completed ✓)
 - **Call Event Plumbing**: Full handling of Matrix call events (`m.call.invite`, `m.call.media`, `m.call.hangup`)
 - **Call Session Management**: Track call state (invited, connecting, connected, ended)
 - **Inbound Call Handling**: Auto-accept incoming calls with `m.call.answer`
@@ -15,7 +15,14 @@ This project is implementing real Matrix voice call support in phases:
 - **Text-Simulated Fallback**: Preserve existing text-based voice call flow
 - **Unit Tests**: 50 tests covering all functionality
 
-### Phase 3 (Planned)
+### Phase 3 (Current - In Progress)
+- **LiveKit Service**: Room management and token generation for LiveKit server
+- **Matrix-LiveKit Adapter**: Bridge between Matrix calls and LiveKit rooms
+- **Async Method Fixes**: Resolved adapter/service method signature mismatches
+- **Unit Tests**: 94 tests covering all functionality (including LiveKit)
+- **Build & Test Pipeline**: TypeScript compilation and test suite passing
+
+### Phase 3 (Remaining)
 - **WebRTC Peer Connection**: Establish RTCPeerConnection for real-time media
 - **Audio Capture**: Capture microphone audio via WebRTC MediaStream
 - **Audio Playback**: Play remote audio through WebRTC remote stream
@@ -30,16 +37,23 @@ This project is implementing real Matrix voice call support in phases:
 
 ---
 
-## What's Functional Now (Phase 2)
+## What's Functional Now (Phase 3 - In Progress)
 
-### Real Media Path (Partial)
+### LiveKit Integration Layer (Partial)
+- ✓ LiveKitService: Room creation, deletion, listing, and participant tracking
+- ✓ LiveKit token generation with JWT authentication
+- ✓ MatrixLiveKitAdapter: Bridge between Matrix rooms and LiveKit rooms
+- ✓ Adapter initialization with connectivity verification
+- ✓ Fallback mode when LiveKit is unavailable
+- ✓ Event emission for call lifecycle (started, ended)
+- ✓ Connection state tracking and statistics
+
+### Matrix Call Plumbing (Full)
 - ✓ Matrix call event handling (invite, media, hangup)
 - ✓ Call session state management
 - ✓ Auto-accept incoming calls
 - ✓ Send call invites for outbound calls
 - ✓ Audio event routing infrastructure
-- ✗ WebRTC peer connection (stubbed)
-- ✗ Real audio capture/playback (stubbed)
 
 ### Text-Simulated Path (Full)
 - ✓ `/call start` command to begin text-simulated call
@@ -48,6 +62,12 @@ This project is implementing real Matrix voice call support in phases:
 - ✓ OpenClaw API integration for text processing
 - ✓ Chatterbox TTS for text-to-speech responses
 - ✓ Audio file upload to Matrix media repository
+
+### Current Limitations
+- ✗ WebRTC peer connection not yet established
+- ✗ Real audio capture/playback not yet implemented
+- ✗ STT integration pending
+- ✗ LiveKit server connection requires configuration
 
 ## Architecture
 
@@ -109,6 +129,8 @@ src/
 ├── services/
 │   ├── matrix-client-service.ts  # Matrix client wrapper
 │   ├── matrix-call-media-service.ts # Call media plumbing (Phase 2)
+│   ├── livekit-service.ts        # LiveKit room/token management (Phase 3)
+│   ├── matrix-livekit-adapter.ts # Matrix-LiveKit bridge (Phase 3)
 │   ├── openclaw-service.ts       # OpenClaw API integration
 │   └── chatterbox-tts-service.ts # TTS service
 ├── config/
@@ -118,6 +140,8 @@ src/
 tests/
 ├── voice-call-handler.test.ts    # Handler tests
 ├── matrix-call-media-service.test.ts # Call media tests (Phase 2)
+├── livekit-service.test.ts       # LiveKit service tests (Phase 3)
+├── matrix-livekit-adapter.test.ts # Adapter tests (Phase 3)
 ├── openclaw-service.test.ts      # OpenClaw service tests
 └── chatterbox-tts-service.test.ts # TTS service tests
 ```
@@ -156,7 +180,11 @@ npm start
 
 ## Roadmap
 
-### Phase 3 (Next)
+### Phase 3 (Current - In Progress)
+- [x] LiveKit service integration (room management, token generation)
+- [x] Matrix-LiveKit adapter with event emission
+- [x] Async method signature fixes across adapter/service
+- [x] Unit tests for LiveKit components (94 total tests passing)
 - [ ] WebRTC peer connection establishment
 - [ ] Audio stream capture (microphone)
 - [ ] Audio stream playback (speaker)
