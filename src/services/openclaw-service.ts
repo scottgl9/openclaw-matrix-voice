@@ -32,11 +32,18 @@ export class OpenClawService {
   private baseUrl: string;
   private token: string;
   private rateLimiter: RateLimiter;
+  private systemMessage: ChatCompletionMessage;
   private conversationHistory: ChatCompletionMessage[] = [];
+  private maxHistory: number;
 
   constructor(baseUrl?: string, token?: string) {
     this.baseUrl = baseUrl || config.openclaw.apiUrl;
     this.token = token || config.openclaw.apiToken;
+    this.maxHistory = config.openclaw.maxConversationHistory;
+    this.systemMessage = {
+      role: 'system',
+      content: config.openclaw.systemPrompt,
+    };
     this.rateLimiter = new RateLimiter({
       maxTokens: 10,
       refillRate: 5,
@@ -48,12 +55,13 @@ export class OpenClawService {
     await this.rateLimiter.acquire();
 
     this.conversationHistory.push({ role: 'user', content: text });
+    this.trimHistory();
 
     try {
       const response = await axios.post<ChatCompletionResponse>(
         `${this.baseUrl}/v1/chat/completions`,
         {
-          messages: this.conversationHistory,
+          messages: [this.systemMessage, ...this.conversationHistory],
           stream: false,
         },
         {
@@ -68,6 +76,7 @@ export class OpenClawService {
       const assistantMessage = response.data.choices?.[0]?.message?.content || '';
       if (assistantMessage) {
         this.conversationHistory.push({ role: 'assistant', content: assistantMessage });
+        this.trimHistory();
       }
 
       return {
@@ -86,5 +95,11 @@ export class OpenClawService {
 
   clearHistory(): void {
     this.conversationHistory = [];
+  }
+
+  private trimHistory(): void {
+    if (this.conversationHistory.length > this.maxHistory) {
+      this.conversationHistory = this.conversationHistory.slice(-this.maxHistory);
+    }
   }
 }

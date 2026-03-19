@@ -3,20 +3,22 @@
 Matrix bot with voice call support using Matrix SDK, LiveKit, Whisper STT, and Chatterbox TTS.
 Integrates with the [OpenClaw](https://openclaw.ai) gateway for LLM responses via the OpenAI-compatible chat completions API.
 
-## Status: Phase 7 - Live Gateway Integration
+## Status: Phase 8 - Service Setup & Voice Configuration
 
-### Recent (Phase 7)
+### Recent (Phase 8)
+- **Voice-optimized system prompt**: Configurable via `OPENCLAW_SYSTEM_PROMPT` env var
+- **Conversation history limits**: Sliding window (default 20 messages) via `MAX_CONVERSATION_HISTORY`
+- **Service setup documentation**: Comprehensive guides for all services
+
+### Phase 7
 - **OpenClaw gateway integration**: Uses `/v1/chat/completions` endpoint with conversation history
 - **Local Whisper STT**: Bundled `faster-whisper` server for CPU-based speech-to-text
 - **Text-simulated voice calls**: Send messages in Matrix during active calls, bot responds via OpenClaw
 - **Matrix bot registered**: Dedicated `@voice-bot` account for voice call handling
 
-### Phase 6 (Complete)
+### Earlier Phases
 - Whisper STT adapter, LiveKit agent service, pluggable audio transport
 - MatrixRTC auto-join, audio resampler, VAD improvements
-- 144 unit tests passing
-
-### Earlier Phases
 - Matrix call event handling, call session management
 - LiveKit room/token management
 - VAD with energy-based speech detection and turn segmentation
@@ -30,8 +32,10 @@ Integrates with the [OpenClaw](https://openclaw.ai) gateway for LLM responses vi
 - Node.js 18+
 - Matrix homeserver with a bot account
 - OpenClaw gateway running (default: `http://localhost:18789`)
-- (Optional) LiveKit server for real-time voice calls
-- (Optional) TTS service for audio responses
+- (Optional) LiveKit server for real-time voice calls — see [LiveKit Setup](docs/LIVEKIT_SETUP.md)
+- (Optional) TTS service for audio responses — see [TTS Setup](docs/TTS_SETUP.md)
+
+> **Full setup guide**: See [docs/SERVICES_GUIDE.md](docs/SERVICES_GUIDE.md) for getting all services running end-to-end.
 
 ### Setup
 ```bash
@@ -55,6 +59,10 @@ MATRIX_ACCESS_TOKEN=syt_...
 WHISPER_URL=http://localhost:8090
 WHISPER_MODEL=tiny
 WHISPER_LANGUAGE=en
+
+# Voice agent (optional)
+OPENCLAW_SYSTEM_PROMPT="You are a helpful voice assistant..."
+MAX_CONVERSATION_HISTORY=20
 
 # TTS (optional)
 CHATTERBOX_TTS_URL=http://localhost:8000/tts

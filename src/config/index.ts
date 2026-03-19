@@ -12,6 +12,8 @@ export interface Config {
   openclaw: {
     apiUrl: string;
     apiToken: string;
+    systemPrompt: string;
+    maxConversationHistory: number;
   };
   chatterbox: {
     ttsUrl: string;
@@ -61,6 +63,8 @@ export const config: Config = {
   openclaw: {
     apiUrl: process.env.OPENCLAW_API_URL || 'http://localhost:18789',
     apiToken: process.env.OPENCLAW_API_TOKEN || '',
+    systemPrompt: process.env.OPENCLAW_SYSTEM_PROMPT || 'You are a helpful voice assistant. Keep responses brief and conversational — 1-2 sentences max. Avoid markdown, bullet points, or formatted text. Speak naturally as if in a phone call.',
+    maxConversationHistory: parseInt(process.env.MAX_CONVERSATION_HISTORY || '20', 10),
   },
   chatterbox: {
     ttsUrl: process.env.CHATTERBOX_TTS_URL || 'http://localhost:8000/tts',
