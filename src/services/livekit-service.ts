@@ -12,6 +12,7 @@
  */
 
 import { RoomServiceClient, AccessToken } from 'livekit-server-sdk';
+import { createHash } from 'crypto';
 
 export interface LiveKitRoom {
   roomId: string;
@@ -77,12 +78,26 @@ export class LiveKitService {
   }
 
   /**
+   * Compute the hashed room name matching lk-jwt-service's format:
+   * sha256(roomName + "|m.call#ROOM") encoded as unpadded base64.
+   * This ensures the bot joins the same LiveKit room as Element Call.
+   */
+  hashRoomName(roomName: string): string {
+    const input = `${roomName}|m.call#ROOM`;
+    return createHash('sha256').update(input).digest('base64').replace(/=+$/, '');
+  }
+
+  /**
    * Create a LiveKit room for a Matrix call
    */
   async createRoom(matrixRoomId: string, roomName?: string): Promise<LiveKitRoom> {
     console.log(`[LiveKit] Creating room for Matrix room ${matrixRoomId}`);
 
-    const name = roomName || `matrix-call-${matrixRoomId.slice(1)}`;
+    // Hash the Matrix room ID to match lk-jwt-service's format so bot
+    // ends up in the same LiveKit room as Element Call clients.
+    const plainName = roomName || matrixRoomId;
+    const name = this.hashRoomName(plainName);
+    console.log(`[LiveKit] Hashed room name: ${plainName} -> ${name}`);
 
     // Delete existing room first to clear stale participant/track state
     try {

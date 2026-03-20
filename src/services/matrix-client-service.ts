@@ -132,7 +132,7 @@ export class MatrixClientService {
           try {
             const stateEvents = await this.client.getRoomState(roomId);
             for (const event of stateEvents) {
-              if (event['type'] === 'm.call.member') {
+              if (event['type'] === 'm.call.member' || event['type'] === 'org.matrix.msc3401.call.member') {
                 const key = `${roomId}:${event['state_key']}`;
                 const serialized = JSON.stringify(event['content']);
                 if (this.lastCallMemberContent.get(key) !== serialized) {

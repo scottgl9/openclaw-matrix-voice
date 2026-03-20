@@ -76,11 +76,8 @@ export class LiveKitAgentService extends EventEmitter {
     });
 
     this.room.on('participantConnected', (participant: any) => {
-      console.log(`[LiveKitAgent] Participant joined: ${participant.identity} — republishing audio track`);
-      // Republish with fresh AudioSource; existing source invalidates when peers join
-      this.republishAudioTrack(sdk).catch((e: any) =>
-        console.error('[LiveKitAgent] republish error:', e.message)
-      );
+      console.log(`[LiveKitAgent] Participant joined: ${participant.identity}`);
+      // Don't republish here — publishAudioBuffer handles InvalidState with retry
     });
 
     this.room.on('disconnected', () => {
@@ -201,6 +198,7 @@ export class LiveKitAgentService extends EventEmitter {
     if (!sdk) return;
 
     this.publishingAborted = false;
+    this.stopSilenceHeartbeat(); // Pause heartbeat during TTS to avoid AudioSource conflicts
 
     let pcmData = audioData;
     if (sampleRate !== LIVEKIT_SAMPLE_RATE) {
@@ -231,12 +229,24 @@ export class LiveKitAgentService extends EventEmitter {
         await this.audioSource.captureFrame(frame);
       } catch (error: any) {
         if (error.message?.includes('InvalidState')) {
-          console.warn('[LiveKitAgent] AudioSource InvalidState — republishing track');
-          loadRtcNode().then(sdk => sdk && this.republishAudioTrack(sdk)).catch(() => {});
+          console.warn('[LiveKitAgent] AudioSource InvalidState — republishing track and retrying chunk');
+          try {
+            await this.republishAudioTrack(sdk);
+            // Retry the chunk with the fresh AudioSource
+            const retryFrame = new sdk.AudioFrame(chunk, LIVEKIT_SAMPLE_RATE, 1, chunk.length);
+            await this.audioSource.captureFrame(retryFrame);
+            continue;
+          } catch (retryError: any) {
+            console.error('[LiveKitAgent] Retry after republish failed:', retryError.message);
+            this.startSilenceHeartbeat();
+            throw retryError;
+          }
         }
+        this.startSilenceHeartbeat();
         throw error;
       }
     }
+    this.startSilenceHeartbeat(); // Resume heartbeat after TTS
   }
 
   isConnected(): boolean {

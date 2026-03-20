@@ -128,8 +128,8 @@ export class VoiceCallHandler {
   async handleEvent(roomId: string, event: any): Promise<void> {
     const type = event['type'];
 
-    // Handle MatrixRTC m.call.member state events
-    if (type === 'm.call.member') {
+    // Handle MatrixRTC m.call.member state events (stable + unstable MSC3401 prefix)
+    if (type === 'm.call.member' || type === 'org.matrix.msc3401.call.member') {
       await this.handleMatrixRTCEvent(roomId, event);
       return;
     }
@@ -176,55 +176,67 @@ export class VoiceCallHandler {
   }
 
   /**
-   * Handle MatrixRTC m.call.member state events.
+   * Handle MatrixRTC call member state events.
+   * Supports both stable (m.call.member) and unstable (org.matrix.msc3401.call.member) formats.
    * Auto-joins LiveKit calls when detected.
    */
   async handleMatrixRTCEvent(roomId: string, event: any): Promise<void> {
     const content = event['content'] || {};
-    const memberships = content['memberships'] || [];
-    const sender = event['state_key'] || event['sender'] || '';
+    const stateKey = event['state_key'] || event['sender'] || '';
+    const eventType = event['type'] || '';
 
-    // Ignore our own m.call.member events
+    // Ignore our own events
     const botUserId = await this.client.getUserId();
-    if (sender === botUserId) {
+    if (stateKey === botUserId || stateKey.startsWith(`_${botUserId}_`)) {
       return;
     }
 
-    console.log(`[VoiceCallHandler] m.call.member from ${sender} in ${roomId}`);
+    console.log(`[VoiceCallHandler] ${eventType} from ${stateKey} in ${roomId}`);
 
+    // Extract LiveKit focus from either format:
+    // Stable: content.memberships[].foci_active[].{type, livekit_service_url, livekit_alias}
+    // MSC3401: content.foci_preferred[].{type, livekit_service_url, livekit_alias}
+    const foci: any[] = [];
+
+    // Stable format
+    const memberships = content['memberships'] || [];
     for (const membership of memberships) {
       const fociActive = membership['foci_active'] || [];
-      for (const focus of fociActive) {
-        if (focus['type'] === 'livekit') {
-          const livekitUrl = focus['livekit_service_url'];
-          const livekitAlias = focus['livekit_alias'] || roomId;
+      foci.push(...fociActive);
+    }
 
-          console.log(`[VoiceCallHandler] MatrixRTC LiveKit call detected in ${roomId}`);
-          console.log(`[VoiceCallHandler] LiveKit URL: ${livekitUrl}, alias: ${livekitAlias}`);
+    // MSC3401 unstable format
+    const fociPreferred = content['foci_preferred'] || [];
+    foci.push(...fociPreferred);
 
-          const existing = this.activeCalls.get(roomId);
-          if (existing?.isActive && existing?.isLiveKitCall) {
-            // Already in a call — if it's the same room, stay; otherwise switch
-            const existingAlias = (existing as any).livekitAlias;
-            if (existingAlias === livekitAlias) {
-              console.log('[VoiceCallHandler] Already in this LiveKit call, skipping');
-              return;
-            }
-            console.log(`[VoiceCallHandler] Switching to caller's LiveKit room: ${livekitAlias}`);
-            await this.endCall(roomId);
+    for (const focus of foci) {
+      if (focus['type'] === 'livekit') {
+        const livekitServiceUrl = focus['livekit_service_url'];
+        const livekitAlias = focus['livekit_alias'] || roomId;
+
+        console.log(`[VoiceCallHandler] MatrixRTC LiveKit call detected in ${roomId}`);
+        console.log(`[VoiceCallHandler] LiveKit service URL: ${livekitServiceUrl}, alias: ${livekitAlias}`);
+
+        const existing = this.activeCalls.get(roomId);
+        if (existing?.isActive && existing?.isLiveKitCall) {
+          const existingAlias = existing.livekitAlias;
+          if (existingAlias === livekitAlias) {
+            console.log('[VoiceCallHandler] Already in this LiveKit call, skipping');
+            return;
           }
-
-          await this.startLiveKitCall(roomId, livekitUrl, livekitAlias);
-          return;
+          console.log(`[VoiceCallHandler] Switching to caller's LiveKit room: ${livekitAlias}`);
+          await this.endCall(roomId);
         }
+
+        await this.startLiveKitCall(roomId, livekitServiceUrl, livekitAlias);
+        return;
       }
     }
 
-    // No active LiveKit focus — call may have ended
-    const existing = this.activeCalls.get(roomId);
-    if (existing?.isActive && existing?.isLiveKitCall) {
-      console.log('[VoiceCallHandler] MatrixRTC call ended, cleaning up');
-      await this.endCall(roomId);
+    // Empty content means this user/device left the call — don't tear down
+    // the bot's persistent call based on other users leaving
+    if (Object.keys(content).length === 0) {
+      console.log(`[VoiceCallHandler] ${stateKey} left the call (empty content), bot stays active`);
     }
   }
 
@@ -283,24 +295,10 @@ export class VoiceCallHandler {
       await this.initializeAudioPipeline(roomId, callState);
       this.activeCalls.set(roomId, callState);
 
-      // Publish m.call.member so Element shows "Join Call" button
+      // Publish call member events so Element shows "Join Call" button
+      // Use Matrix room ID as alias — lk-jwt-service hashes it to match the actual LiveKit room name
       const livekitServiceUrl = config.livekit.jwtServiceUrl || liveKitService.getUrl().replace('ws://', 'http://').replace('wss://', 'https://');
-      await this.client.sendStateEvent(roomId, 'm.call.member', botUserId, {
-        memberships: [{
-          call_id: '',
-          scope: 'm.room',
-          application: 'm.call',
-          device_id: 'VOICE_BOT',
-          expires: Math.floor(Date.now() / 1000) + 3600,
-          foci_active: [{
-            type: 'livekit',
-            livekit_service_url: livekitServiceUrl,
-            livekit_alias: room.name,
-          }],
-        }],
-      });
-
-      console.log(`[VoiceCallHandler] Published m.call.member for room ${roomId}, LiveKit room: ${room.name}`);
+      await this.publishCallMemberEvents(roomId, livekitServiceUrl, roomId, 3600);
       await this.matrixService.sendMessage(roomId, '📞 Voice call ready! Click **Join Call** above to connect. I\'m listening with Whisper and will respond with Chatterbox TTS.');
     } catch (error: any) {
       console.error('[VoiceCallHandler] Error setting up LiveKit call:', error.message);
@@ -337,10 +335,15 @@ export class VoiceCallHandler {
 
     try {
       const botUserId = await this.client.getUserId();
-      const token = await liveKitService.generateToken(livekitAlias, botUserId, true, true);
+      // Hash the alias to match lk-jwt-service's room naming
+      const hashedAlias = liveKitService.hashRoomName(livekitAlias);
+      console.log(`[VoiceCallHandler] Joining hashed LiveKit room: ${livekitAlias} -> ${hashedAlias}`);
+      const token = await liveKitService.generateToken(hashedAlias, botUserId, true, true);
 
       const agent = new LiveKitAgentService(liveKitService);
-      await agent.joinRoom(livekitUrl, token);
+      // Always use the bot's configured LiveKit WS URL (livekitUrl param may be a JWT service URL)
+      const wsUrl = liveKitService.getUrl();
+      await agent.joinRoom(wsUrl, token);
 
       const callState: CallState = {
         isActive: true,
@@ -359,7 +362,7 @@ export class VoiceCallHandler {
       await this.callStore.addSession({
         roomId,
         isLiveKitCall: true,
-        livekitUrl: livekitUrl,
+        livekitUrl: wsUrl,
         livekitAlias: livekitAlias,
         startedAt: new Date().toISOString(),
       });
@@ -397,28 +400,13 @@ export class VoiceCallHandler {
 
           callState.isLiveKitCall = true;
           callState.livekitAgent = agent;
-          callState.livekitAlias = room.name;
+          callState.livekitAlias = roomId; // Store unhashed alias to match MSC3401 events
 
           await this.initializeAudioPipeline(roomId, callState);
 
-          // Post m.call.member so Element shows "Join Call" button automatically
+          // Post call member events so Element shows "Join Call" button automatically
           const livekitServiceUrl = config.livekit.jwtServiceUrl || liveKitService.getUrl().replace('ws://', 'http://').replace('wss://', 'https://');
-          const botUserId2 = await this.client.getUserId();
-          await this.client.sendStateEvent(roomId, 'm.call.member', botUserId2, {
-            memberships: [{
-              call_id: '',
-              scope: 'm.room',
-              application: 'm.call',
-              device_id: 'VOICE_BOT',
-              expires: Math.floor(Date.now() / 1000) + 86400,
-              foci_active: [{
-                type: 'livekit',
-                livekit_service_url: livekitServiceUrl,
-                livekit_alias: room.name,
-              }],
-            }],
-          });
-          console.log(`[VoiceCallHandler] Posted m.call.member, LiveKit room: ${room.name}`);
+          await this.publishCallMemberEvents(roomId, livekitServiceUrl, roomId, 86400);
 
           await this.callStore.addSession({
             roomId,
@@ -703,6 +691,51 @@ export class VoiceCallHandler {
     } else {
       await this.matrixService.sendMessage(roomId, `Error: ${response.error || 'Unknown error'}`);
     }
+  }
+
+  /**
+   * Publish call member state events in both stable and MSC3401 formats
+   * so that all Element clients can see the bot in the call.
+   */
+  private async publishCallMemberEvents(roomId: string, livekitServiceUrl: string, livekitAlias: string, expiresSeconds: number): Promise<void> {
+    const botUserId = await this.client.getUserId();
+
+    // Stable format (m.call.member)
+    await this.client.sendStateEvent(roomId, 'm.call.member', botUserId, {
+      memberships: [{
+        call_id: '',
+        scope: 'm.room',
+        application: 'm.call',
+        device_id: 'VOICE_BOT',
+        expires: Math.floor(Date.now() / 1000) + expiresSeconds,
+        foci_active: [{
+          type: 'livekit',
+          livekit_service_url: livekitServiceUrl,
+          livekit_alias: livekitAlias,
+        }],
+      }],
+    });
+
+    // MSC3401 unstable format (org.matrix.msc3401.call.member)
+    const msc3401StateKey = `_${botUserId}_VOICE_BOT_m.call`;
+    await this.client.sendStateEvent(roomId, 'org.matrix.msc3401.call.member', msc3401StateKey, {
+      application: 'm.call',
+      call_id: '',
+      scope: 'm.room',
+      device_id: 'VOICE_BOT',
+      expires: expiresSeconds * 1000,
+      focus_active: {
+        type: 'livekit',
+        focus_selection: 'oldest_membership',
+      },
+      foci_preferred: [{
+        type: 'livekit',
+        livekit_service_url: livekitServiceUrl,
+        livekit_alias: livekitAlias,
+      }],
+    });
+
+    console.log(`[VoiceCallHandler] Published call member events (stable + MSC3401), LiveKit alias: ${livekitAlias}`);
   }
 
   getActiveCall(roomId: string): CallState | undefined {
