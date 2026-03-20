@@ -279,7 +279,7 @@ export class VoiceCallHandler {
       // Create LiveKit room and bot joins it
       const livekitRoomName = `matrix-voice-${roomId.replace(/[^a-zA-Z0-9]/g, '-')}`;
       const room = await liveKitService.createRoom(livekitRoomName);
-      const token = await liveKitService.generateToken(room.name, botUserId, true, true);
+      const token = await liveKitService.generateToken(room.name, `${botUserId}:VOICE_BOT`, true, true);
 
       const agent = new LiveKitAgentService(liveKitService);
       await agent.joinRoom(liveKitService.getUrl(), token);
@@ -338,7 +338,7 @@ export class VoiceCallHandler {
       // Hash the alias to match lk-jwt-service's room naming
       const hashedAlias = liveKitService.hashRoomName(livekitAlias);
       console.log(`[VoiceCallHandler] Joining hashed LiveKit room: ${livekitAlias} -> ${hashedAlias}`);
-      const token = await liveKitService.generateToken(hashedAlias, botUserId, true, true);
+      const token = await liveKitService.generateToken(hashedAlias, `${botUserId}:VOICE_BOT`, true, true);
 
       const agent = new LiveKitAgentService(liveKitService);
       // Always use the bot's configured LiveKit WS URL (livekitUrl param may be a JWT service URL)
@@ -393,7 +393,7 @@ export class VoiceCallHandler {
         try {
           const room = await liveKitService.createRoom(roomId);
           const botUserId = await this.client.getUserId();
-          const token = await liveKitService.generateToken(room.name, botUserId, true, true);
+          const token = await liveKitService.generateToken(room.name, `${botUserId}:VOICE_BOT`, true, true);
 
           const agent = new LiveKitAgentService(liveKitService);
           await agent.joinRoom(liveKitService.getUrl(), token);
