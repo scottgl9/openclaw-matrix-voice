@@ -74,7 +74,30 @@ export class OpenClawService {
         }
       );
 
-      const assistantMessage = response.data.choices?.[0]?.message?.content || '';
+      let assistantMessage = response.data.choices?.[0]?.message?.content || '';
+
+      // Retry once if empty response (gateway may rate-limit rapid requests)
+      if (!assistantMessage) {
+        console.warn('[OpenClaw] Empty response, retrying once...');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const retry = await axios.post<ChatCompletionResponse>(
+          `${this.baseUrl}/v1/chat/completions`,
+          {
+            model: `openclaw:${config.openclaw.agentId}`,
+            messages: [this.systemMessage, ...this.conversationHistory],
+            stream: false,
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${this.token}`,
+            },
+            timeout: 60000,
+          }
+        );
+        assistantMessage = retry.data.choices?.[0]?.message?.content || '';
+      }
+
       if (assistantMessage) {
         this.conversationHistory.push({ role: 'assistant', content: assistantMessage });
         this.trimHistory();
@@ -82,7 +105,7 @@ export class OpenClawService {
 
       return {
         success: true,
-        response: assistantMessage || 'No response generated',
+        response: assistantMessage || 'Sorry, I didn\'t catch that. Could you repeat?',
       };
     } catch (error) {
       const axiosError = error as AxiosError;

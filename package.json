@@ -24,6 +24,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@jitsi/rnnoise-wasm": "^0.2.1",
     "@livekit/rtc-node": "0.12.2",
     "axios": "1.13.6",
     "dotenv": "16.6.1",

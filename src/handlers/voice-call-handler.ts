@@ -497,19 +497,16 @@ export class VoiceCallHandler {
     await turnProcessor.initialize();
 
     pipeline.on('turn.complete', async (event: any) => {
-      // If bot is speaking, check if this is a real barge-in or just echo
+      // While bot is speaking, either barge-in (if enabled) or suppress echo
       if (callState.botSpeaking) {
-        // Require minimum 400ms of speech to count as intentional barge-in
-        // (echo/noise produces very short turns)
-        if (event.durationMs >= 400) {
+        if (config.bargeIn.enabled && event.durationMs >= config.bargeIn.minDurationMs) {
           console.log(`[VoiceCallHandler] Barge-in: ${event.durationMs}ms speech while bot speaking`);
           callState.livekitAgent?.stopPublishing();
           callState.turnProcessor?.cancel();
           if (callState.ttsPlaybackTimer) clearTimeout(callState.ttsPlaybackTimer);
           callState.botSpeaking = false;
-          // Process this turn as the new user input
         } else {
-          console.log(`[VoiceCallHandler] Ignoring short turn (${event.durationMs}ms) while bot speaking (echo suppression)`);
+          console.log(`[VoiceCallHandler] Ignoring turn (${event.durationMs}ms) while bot speaking (echo suppression)`);
           return;
         }
       }
