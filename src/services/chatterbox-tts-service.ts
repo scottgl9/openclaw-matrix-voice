@@ -45,12 +45,14 @@ export class ChatterboxTTSService {
         {
           text,
           format: 'wav',
-          sampleRate: config.audio.sampleRate,
+          sampleRate: 24000, // Chatterbox native rate; pipeline resamples to 16kHz
+          exaggeration: 0.5,
+          cfg_weight: 0.3,
         },
         {
           headers,
           responseType: 'arraybuffer',
-          timeout: 30000,
+          timeout: 90000,
         }
       );
 

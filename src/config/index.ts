@@ -24,6 +24,7 @@ export interface Config {
     url: string;
     apiKey: string;
     apiSecret: string;
+    jwtServiceUrl: string;
   };
   whisper: {
     url: string;
@@ -75,6 +76,7 @@ export const config: Config = {
     url: process.env.LIVEKIT_URL || 'ws://localhost:7880',
     apiKey: process.env.LIVEKIT_API_KEY || '',
     apiSecret: process.env.LIVEKIT_API_SECRET || '',
+    jwtServiceUrl: process.env.LIVEKIT_JWT_SERVICE_URL || '',
   },
   whisper: {
     url: process.env.WHISPER_URL || '',

@@ -107,8 +107,16 @@ export class TurnProcessorService extends EventEmitter {
         throw new Error(sttResult.error || 'STT transcription failed');
       }
 
+      // Skip empty transcriptions (noise, silence, garbled audio)
+      const transcribedText = (sttResult.text || '').trim();
+      if (!transcribedText) {
+        console.log('[TurnProcessor] Empty transcription, skipping');
+        this.setState(TurnProcessingState.IDLE);
+        return;
+      }
+
       // Step 2: Process text through OpenClaw (with retry)
-      const openClawResult = await this.processText(sttResult.text!);
+      const openClawResult = await this.processText(transcribedText);
 
       if (!openClawResult.success) {
         throw new Error(openClawResult.error || 'OpenClaw processing failed');
@@ -196,13 +204,22 @@ export class TurnProcessorService extends EventEmitter {
   }
 
   private async generateTTS(text: string): Promise<TTSResponse> {
-    console.log(`[TurnProcessor] Generating TTS for: "${text}"`);
+    // Strip markdown and truncate for voice — long responses cause TTS timeouts
+    const voiceText = text
+      .replace(/\*\*([^*]+)\*\*/g, '$1')  // bold
+      .replace(/\*([^*]+)\*/g, '$1')       // italic
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
+      .replace(/^[-*#>]+\s*/gm, '')        // bullets/headers
+      .replace(/\n+/g, ' ')               // newlines
+      .trim()
+      .slice(0, 400);
+    console.log(`[TurnProcessor] Generating TTS for: "${voiceText}"`);
     this.setState(TurnProcessingState.RESPONDING);
 
     try {
       const result = await withRetry(
-        () => this.ttsService.textToSpeechCached(text),
-        { maxAttempts: 2, label: 'TTS', timeoutMs: 30000 }
+        () => this.ttsService.textToSpeechCached(voiceText),
+        { maxAttempts: 2, label: 'TTS', timeoutMs: 90000 }
       );
 
       if (result.success) {

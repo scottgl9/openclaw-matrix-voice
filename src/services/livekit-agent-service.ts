@@ -88,7 +88,9 @@ export class LiveKitAgentService extends EventEmitter {
     this.audioSource = new sdk.AudioSource(LIVEKIT_SAMPLE_RATE, 1);
     this.localAudioTrack = sdk.LocalAudioTrack.createAudioTrack('bot-audio', this.audioSource);
 
-    await this.room.localParticipant.publishTrack(this.localAudioTrack);
+    const publishOptions = new sdk.TrackPublishOptions();
+    publishOptions.source = sdk.TrackSource.SOURCE_MICROPHONE;
+    await this.room.localParticipant.publishTrack(this.localAudioTrack, publishOptions);
 
     console.log('[LiveKitAgent] Joined room and published audio track');
   }
@@ -147,7 +149,15 @@ export class LiveKitAgentService extends EventEmitter {
       samples.length
     );
 
-    await this.audioSource.captureFrame(frame);
+    try {
+      await this.audioSource.captureFrame(frame);
+    } catch (error: any) {
+      if (error.message?.includes('InvalidState')) {
+        console.warn('[LiveKitAgent] AudioSource InvalidState — marking disconnected');
+        this.connected = false;
+      }
+      throw error;
+    }
   }
 
   isConnected(): boolean {

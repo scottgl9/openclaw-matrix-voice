@@ -21,6 +21,7 @@ export interface CallState {
   vadService?: VadService;
   livekitAgent?: LiveKitAgentService;
   isLiveKitCall?: boolean;
+  livekitAlias?: string;
 }
 
 export class VoiceCallHandler {
@@ -131,6 +132,16 @@ export class VoiceCallHandler {
       return;
     }
 
+    // Handle legacy WebRTC call signalling (Element's native call button)
+    if (type === 'm.call.invite') {
+      await this.handleCallInvite(roomId, event);
+      return;
+    }
+    if (type === 'm.call.hangup') {
+      await this.handleCallHangup(roomId, event);
+      return;
+    }
+
     // Handle call control events and text-simulated voice input
     if (type === 'm.room.message') {
       const content = event['content'] || {};
@@ -169,6 +180,15 @@ export class VoiceCallHandler {
   async handleMatrixRTCEvent(roomId: string, event: any): Promise<void> {
     const content = event['content'] || {};
     const memberships = content['memberships'] || [];
+    const sender = event['state_key'] || event['sender'] || '';
+
+    // Ignore our own m.call.member events
+    const botUserId = await this.client.getUserId();
+    if (sender === botUserId) {
+      return;
+    }
+
+    console.log(`[VoiceCallHandler] m.call.member from ${sender} in ${roomId}`);
 
     for (const membership of memberships) {
       const fociActive = membership['foci_active'] || [];
@@ -182,8 +202,14 @@ export class VoiceCallHandler {
 
           const existing = this.activeCalls.get(roomId);
           if (existing?.isActive && existing?.isLiveKitCall) {
-            console.log('[VoiceCallHandler] Already in this LiveKit call, skipping');
-            return;
+            // Already in a call — if it's the same room, stay; otherwise switch
+            const existingAlias = (existing as any).livekitAlias;
+            if (existingAlias === livekitAlias) {
+              console.log('[VoiceCallHandler] Already in this LiveKit call, skipping');
+              return;
+            }
+            console.log(`[VoiceCallHandler] Switching to caller's LiveKit room: ${livekitAlias}`);
+            await this.endCall(roomId);
           }
 
           await this.startLiveKitCall(roomId, livekitUrl, livekitAlias);
@@ -192,10 +218,109 @@ export class VoiceCallHandler {
       }
     }
 
-    // No active LiveKit focus - call may have ended
+    // No active LiveKit focus — call may have ended
     const existing = this.activeCalls.get(roomId);
     if (existing?.isActive && existing?.isLiveKitCall) {
       console.log('[VoiceCallHandler] MatrixRTC call ended, cleaning up');
+      await this.endCall(roomId);
+    }
+  }
+
+  /**
+   * Handle legacy m.call.invite (Element native call button / WebRTC signalling).
+   * Responds with m.call.answer to accept the call, then starts a text-simulated session.
+   */
+  async handleCallInvite(roomId: string, event: any): Promise<void> {
+    const sender = event['sender'];
+    const botUserId = await this.client.getUserId();
+    if (sender === botUserId) return;
+
+    const content = event['content'] || {};
+    const callId = content['call_id'];
+
+    console.log(`[VoiceCallHandler] Legacy m.call.invite from ${sender}, call_id=${callId} — redirecting to LiveKit`);
+
+    // Decline the legacy WebRTC call (bot can't do peer-to-peer WebRTC)
+    await this.client.sendEvent(roomId, 'm.call.hangup', {
+      call_id: callId,
+      party_id: 'BOT',
+      version: '1',
+      reason: 'user_hangup',
+    });
+
+    // If already in a LiveKit call, just decline the WebRTC invite — user should see Join Call banner
+    if (this.activeCalls.get(roomId)?.isActive) {
+      console.log('[VoiceCallHandler] Already in LiveKit call, declining legacy WebRTC invite');
+      await this.client.sendEvent(roomId, 'm.call.hangup', {
+        call_id: callId, party_id: 'BOT', version: '1', reason: 'user_hangup',
+      });
+      return;
+    }
+
+    const liveKitService = this.matrixService.getLiveKitService();
+    if (!liveKitService) {
+      await this.matrixService.sendMessage(roomId, '⚠️ LiveKit not available. Use /call start to begin a text call.');
+      return;
+    }
+
+    try {
+      // Create LiveKit room and bot joins it
+      const livekitRoomName = `matrix-voice-${roomId.replace(/[^a-zA-Z0-9]/g, '-')}`;
+      const room = await liveKitService.createRoom(livekitRoomName);
+      const token = await liveKitService.generateToken(room.name, botUserId, true, true);
+
+      const agent = new LiveKitAgentService(liveKitService);
+      await agent.joinRoom(liveKitService.getUrl(), token);
+
+      const callState: CallState = {
+        isActive: true,
+        roomId,
+        lastActivity: new Date(),
+        isLiveKitCall: true,
+        livekitAgent: agent,
+      };
+
+      await this.initializeAudioPipeline(roomId, callState);
+      this.activeCalls.set(roomId, callState);
+
+      // Publish m.call.member so Element shows "Join Call" button
+      const livekitServiceUrl = config.livekit.jwtServiceUrl || liveKitService.getUrl().replace('ws://', 'http://').replace('wss://', 'https://');
+      await this.client.sendStateEvent(roomId, 'm.call.member', botUserId, {
+        memberships: [{
+          call_id: '',
+          scope: 'm.room',
+          application: 'm.call',
+          device_id: 'VOICE_BOT',
+          expires: Math.floor(Date.now() / 1000) + 3600,
+          foci_active: [{
+            type: 'livekit',
+            livekit_service_url: livekitServiceUrl,
+            livekit_alias: room.name,
+          }],
+        }],
+      });
+
+      console.log(`[VoiceCallHandler] Published m.call.member for room ${roomId}, LiveKit room: ${room.name}`);
+      await this.matrixService.sendMessage(roomId, '📞 Voice call ready! Click **Join Call** above to connect. I\'m listening with Whisper and will respond with Chatterbox TTS.');
+    } catch (error: any) {
+      console.error('[VoiceCallHandler] Error setting up LiveKit call:', error.message);
+      await this.matrixService.sendMessage(roomId, `❌ Failed to start voice call: ${error.message}`);
+    }
+  }
+
+  /**
+   * Handle legacy m.call.hangup.
+   */
+  async handleCallHangup(roomId: string, event: any): Promise<void> {
+    const sender = event['sender'];
+    const botUserId = await this.client.getUserId();
+    if (sender === botUserId) return;
+
+    const callId = event['content']?.['call_id'];
+    console.log(`[VoiceCallHandler] Legacy m.call.hangup from ${sender}, call_id=${callId}`);
+
+    const existing = this.activeCalls.get(roomId);
+    if (existing?.isActive && !existing?.isLiveKitCall) {
       await this.endCall(roomId);
     }
   }
@@ -223,6 +348,7 @@ export class VoiceCallHandler {
         lastActivity: new Date(),
         isLiveKitCall: true,
         livekitAgent: agent,
+        livekitAlias,
       };
 
       await this.initializeAudioPipeline(roomId, callState);
@@ -274,6 +400,25 @@ export class VoiceCallHandler {
 
           await this.initializeAudioPipeline(roomId, callState);
 
+          // Post m.call.member so Element shows "Join Call" button automatically
+          const livekitServiceUrl = config.livekit.jwtServiceUrl || liveKitService.getUrl().replace('ws://', 'http://').replace('wss://', 'https://');
+          const botUserId2 = await this.client.getUserId();
+          await this.client.sendStateEvent(roomId, 'm.call.member', botUserId2, {
+            memberships: [{
+              call_id: '',
+              scope: 'm.room',
+              application: 'm.call',
+              device_id: 'VOICE_BOT',
+              expires: Math.floor(Date.now() / 1000) + 86400,
+              foci_active: [{
+                type: 'livekit',
+                livekit_service_url: livekitServiceUrl,
+                livekit_alias: room.name,
+              }],
+            }],
+          });
+          console.log(`[VoiceCallHandler] Posted m.call.member, LiveKit room: ${room.name}`);
+
           await this.callStore.addSession({
             roomId,
             isLiveKitCall: true,
@@ -293,8 +438,18 @@ export class VoiceCallHandler {
     this.activeCalls.set(roomId, callState);
 
     let message = 'Voice call started. Send messages and I\'ll respond.';
-    if (callState.isLiveKitCall) {
-      message = 'LiveKit voice call started (VAD-driven). I\'m listening...';
+    if (callState.isLiveKitCall && callState.livekitAlias) {
+      const liveKitService = this.matrixService.getLiveKitService();
+      if (liveKitService) {
+        try {
+          const userToken = await liveKitService.generateToken(callState.livekitAlias, 'user', true, true);
+          const livekitWsUrl = encodeURIComponent('wss://scottgl-aipc.taile589de.ts.net/livekit/sfu');
+          const joinUrl = `https://scottgl-aipc.taile589de.ts.net/call/join.html?liveKitUrl=${livekitWsUrl}&token=${encodeURIComponent(userToken)}`;
+          message = `📞 Voice call ready! Join here:\n${joinUrl}\n\nI'm listening with Whisper and will respond with Chatterbox TTS.`;
+        } catch (e: any) {
+          message = 'LiveKit voice call started (VAD-driven). I\'m listening...';
+        }
+      }
     }
 
     await this.matrixService.sendMessage(roomId, message);
@@ -382,7 +537,12 @@ export class VoiceCallHandler {
       console.log('[VoiceCallHandler] TTS audio ready');
       try {
         if (callState.livekitAgent && callState.livekitAgent.isConnected()) {
-          await callState.livekitAgent.publishAudioBuffer(event.audioData, config.audio.sampleRate);
+          // Read actual sample rate from WAV header (bytes 24-27, little-endian uint32)
+          const wavSampleRate = event.audioData.readUInt32LE(24);
+          // Strip WAV header (44 bytes) to get raw PCM
+          const pcmData = event.audioData.slice(44);
+          console.log(`[VoiceCallHandler] TTS WAV: ${wavSampleRate}Hz, ${pcmData.length} PCM bytes`);
+          await callState.livekitAgent.publishAudioBuffer(pcmData, wavSampleRate);
         } else {
           await this.matrixService.sendAudio(roomId, event.audioData, event.mimeType);
         }
@@ -397,6 +557,11 @@ export class VoiceCallHandler {
     turnProcessor.on('error', async (event: any) => {
       console.error('[VoiceCallHandler] Turn processing error:', event.error);
       await this.matrixService.sendMessage(roomId, `Processing error: ${event.error}`).catch(() => {});
+    });
+
+    // Prevent unhandled error crashes from pipeline (e.g. LiveKit InvalidState)
+    pipeline.on('error', (error: any) => {
+      console.error('[VoiceCallHandler] Audio pipeline error (non-fatal):', error.message);
     });
 
     callState.audioPipeline = pipeline;
@@ -524,6 +689,10 @@ export class VoiceCallHandler {
     } else {
       await this.matrixService.sendMessage(roomId, `Error: ${response.error || 'Unknown error'}`);
     }
+  }
+
+  getActiveCall(roomId: string): CallState | undefined {
+    return this.activeCalls.get(roomId);
   }
 
   getActiveCallCount(): number {

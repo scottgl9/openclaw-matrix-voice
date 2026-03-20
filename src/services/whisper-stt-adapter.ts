@@ -6,6 +6,8 @@
  */
 
 import axios from 'axios';
+import { writeFileSync } from 'fs';
+import { resample } from './audio-resampler.js';
 import wavefile from 'wavefile';
 const { WaveFile } = wavefile;
 import { STTAdapter, STTResult } from './stt-adapter.js';
@@ -81,7 +83,16 @@ export class WhisperSTTAdapter implements STTAdapter {
     const sampleRate = this.frameBuffer[0].sampleRate;
     const channels = this.frameBuffer[0].channels;
 
-    const wavBuffer = this.pcmToWav(pcmData, sampleRate, channels);
+    // Resample to 16kHz if needed (Whisper expects 16kHz)
+    const targetSampleRate = 16000;
+    const pcmResampled = sampleRate !== targetSampleRate
+      ? resample(pcmData, sampleRate, targetSampleRate, channels)
+      : pcmData;
+
+    const wavBuffer = this.pcmToWav(pcmResampled, targetSampleRate, channels);
+
+    // DEBUG: dump wav to /tmp for inspection
+    try { writeFileSync('/tmp/whisper-debug.wav', wavBuffer); } catch(e) {}
 
     // POST to Whisper API with retry
     const result = await withRetry(
@@ -106,7 +117,7 @@ export class WhisperSTTAdapter implements STTAdapter {
     );
 
     const text = result.text || '';
-    console.log(`[STT/Whisper] Transcribed: "${text}"`);
+    console.log(`[STT/Whisper] Transcribed: "${text}" (frames=${this.frameBuffer.length}, pcmBytes=${pcmData.length}, sampleRate=${sampleRate}, channels=${channels})`);
 
     return {
       text: text.trim(),

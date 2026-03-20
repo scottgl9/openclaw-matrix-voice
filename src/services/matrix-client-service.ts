@@ -59,6 +59,28 @@ export class MatrixClientService {
     console.log('Matrix client started successfully');
     const userId = await this.client.getUserId();
     console.log(`Listening for events as: ${userId}`);
+
+    // Poll room state for m.call.member (matrix-bot-sdk doesn't emit state events from sync)
+    this.startCallMemberPoller();
+
+    // Auto-start LiveKit call in configured room so Element sees it immediately
+    if (config.matrix.voiceCallRoomId) {
+      setTimeout(() => this.autoStartVoiceRoom(config.matrix.voiceCallRoomId!), 2000);
+    }
+  }
+
+  private async autoStartVoiceRoom(roomId: string): Promise<void> {
+    console.log(`[MatrixClientService] Auto-starting persistent voice room: ${roomId}`);
+    try {
+      const existing = this.voiceCallHandler.getActiveCall(roomId);
+      if (existing?.isActive) {
+        console.log('[MatrixClientService] Voice room already active, skipping auto-start');
+        return;
+      }
+      await this.voiceCallHandler.startCall(roomId, true);
+    } catch (err: any) {
+      console.error('[MatrixClientService] Auto-start voice room error:', err.message);
+    }
   }
 
   /**
@@ -99,6 +121,36 @@ export class MatrixClientService {
     return this.liveKitService;
   }
 
+  private callMemberPollInterval: ReturnType<typeof setInterval> | null = null;
+  private lastCallMemberContent: Map<string, string> = new Map();
+
+  private startCallMemberPoller(): void {
+    this.callMemberPollInterval = setInterval(async () => {
+      try {
+        const rooms = await this.client.getJoinedRooms();
+        for (const roomId of rooms) {
+          try {
+            const stateEvents = await this.client.getRoomState(roomId);
+            for (const event of stateEvents) {
+              if (event['type'] === 'm.call.member') {
+                const key = `${roomId}:${event['state_key']}`;
+                const serialized = JSON.stringify(event['content']);
+                if (this.lastCallMemberContent.get(key) !== serialized) {
+                  this.lastCallMemberContent.set(key, serialized);
+                  console.log(`[MatrixClientService] Detected m.call.member state change in ${roomId}`);
+                  await this.voiceCallHandler.handleEvent(roomId, event);
+                }
+              }
+            }
+          } catch (_) { /* room may not be accessible */ }
+        }
+      } catch (err) {
+        console.error('[MatrixClientService] Call member poller error:', err);
+      }
+    }, 2000);
+    console.log('[MatrixClientService] m.call.member state poller started (2s interval)');
+  }
+
   private setupEventHandlers(): void {
     this.client.on('room.message', async (roomId, event) => {
       try {
@@ -117,6 +169,15 @@ export class MatrixClientService {
         await this.voiceCallHandler.handleEvent(roomId, event);
       } catch (error) {
         console.error('Error handling room event:', error);
+      }
+    });
+
+    // Handle state events (m.call.member for MatrixRTC/Element Call)
+    this.client.on('room.state.updated', async (roomId: string, event: any) => {
+      try {
+        await this.voiceCallHandler.handleEvent(roomId, event);
+      } catch (error) {
+        console.error('Error handling room state event:', error);
       }
     });
 
