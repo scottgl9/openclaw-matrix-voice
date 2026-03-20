@@ -61,6 +61,7 @@ export class OpenClawService {
       const response = await axios.post<ChatCompletionResponse>(
         `${this.baseUrl}/v1/chat/completions`,
         {
+          model: `openclaw:${config.openclaw.agentId}`,
           messages: [this.systemMessage, ...this.conversationHistory],
           stream: false,
         },

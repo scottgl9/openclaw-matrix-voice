@@ -83,7 +83,15 @@ export class LiveKitService {
     console.log(`[LiveKit] Creating room for Matrix room ${matrixRoomId}`);
 
     const name = roomName || `matrix-call-${matrixRoomId.slice(1)}`;
-    
+
+    // Delete existing room first to clear stale participant/track state
+    try {
+      await this.roomService.deleteRoom(name);
+      console.log(`[LiveKit] Deleted stale room: ${name}`);
+    } catch {
+      // Room didn't exist — that's fine
+    }
+
     try {
       // Create room via LiveKit API
       const room = await this.roomService.createRoom({

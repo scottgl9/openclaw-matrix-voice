@@ -36,6 +36,7 @@ export class LiveKitAgentService extends EventEmitter {
   private audioSource: any = null;
   private localAudioTrack: any = null;
   private connected: boolean = false;
+  private silenceInterval: NodeJS.Timeout | null = null;
 
   // Reconnection state
   private reconnectAttempts: number = 0;
@@ -71,6 +72,14 @@ export class LiveKitAgentService extends EventEmitter {
       this.handleTrackSubscribed(sdk, track, participant);
     });
 
+    this.room.on('participantConnected', (participant: any) => {
+      console.log(`[LiveKitAgent] Participant joined: ${participant.identity} — republishing audio track`);
+      // Republish with fresh AudioSource; existing source invalidates when peers join
+      this.republishAudioTrack(sdk).catch((e: any) =>
+        console.error('[LiveKitAgent] republish error:', e.message)
+      );
+    });
+
     this.room.on('disconnected', () => {
       console.log('[LiveKitAgent] Disconnected from room');
       this.connected = false;
@@ -93,6 +102,50 @@ export class LiveKitAgentService extends EventEmitter {
     await this.room.localParticipant.publishTrack(this.localAudioTrack, publishOptions);
 
     console.log('[LiveKitAgent] Joined room and published audio track');
+    this.startSilenceHeartbeat();
+  }
+
+  /** Unpublish stale track and publish a fresh AudioSource — call when InvalidState or on peer join */
+  private async republishAudioTrack(sdk: any): Promise<void> {
+    this.stopSilenceHeartbeat();
+    try {
+      if (this.localAudioTrack && this.room?.localParticipant) {
+        await this.room.localParticipant.unpublishTrack(this.localAudioTrack);
+      }
+    } catch { /* ignore unpublish errors */ }
+
+    this.audioSource = new sdk.AudioSource(LIVEKIT_SAMPLE_RATE, 1);
+    this.localAudioTrack = sdk.LocalAudioTrack.createAudioTrack('bot-audio', this.audioSource);
+    const publishOptions = new sdk.TrackPublishOptions();
+    publishOptions.source = sdk.TrackSource.SOURCE_MICROPHONE;
+    await this.room.localParticipant.publishTrack(this.localAudioTrack, publishOptions);
+    console.log('[LiveKitAgent] Republished audio track with fresh AudioSource');
+    this.startSilenceHeartbeat();
+  }
+
+  /** Send silent frames every 200ms to keep the AudioSource alive */
+  private startSilenceHeartbeat(): void {
+    this.stopSilenceHeartbeat();
+    const framesPerInterval = Math.floor(LIVEKIT_SAMPLE_RATE * 0.2); // 200ms of frames
+    const silence = new Int16Array(framesPerInterval); // all zeros
+    this.silenceInterval = setInterval(async () => {
+      if (!this.connected || !this.audioSource) return;
+      try {
+        const sdk = await loadRtcNode();
+        if (!sdk) return;
+        const frame = new sdk.AudioFrame(silence, LIVEKIT_SAMPLE_RATE, 1, framesPerInterval);
+        await this.audioSource.captureFrame(frame);
+      } catch {
+        // ignore — real error handling is in publishAudioBuffer
+      }
+    }, 200);
+  }
+
+  private stopSilenceHeartbeat(): void {
+    if (this.silenceInterval) {
+      clearInterval(this.silenceInterval);
+      this.silenceInterval = null;
+    }
   }
 
   /**
@@ -100,6 +153,7 @@ export class LiveKitAgentService extends EventEmitter {
    */
   async leaveRoom(): Promise<void> {
     this.intentionalDisconnect = true;
+    this.stopSilenceHeartbeat();
 
     if (this.room) {
       console.log('[LiveKitAgent] Leaving room...');
@@ -153,8 +207,8 @@ export class LiveKitAgentService extends EventEmitter {
       await this.audioSource.captureFrame(frame);
     } catch (error: any) {
       if (error.message?.includes('InvalidState')) {
-        console.warn('[LiveKitAgent] AudioSource InvalidState — marking disconnected');
-        this.connected = false;
+        console.warn('[LiveKitAgent] AudioSource InvalidState — republishing track');
+        loadRtcNode().then(sdk => sdk && this.republishAudioTrack(sdk)).catch(() => {});
       }
       throw error;
     }

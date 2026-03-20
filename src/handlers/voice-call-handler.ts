@@ -248,12 +248,20 @@ export class VoiceCallHandler {
       reason: 'user_hangup',
     });
 
-    // If already in a LiveKit call, just decline the WebRTC invite — user should see Join Call banner
+    // If already in a LiveKit call, post a fresh join link — user clicked legacy call by mistake
     if (this.activeCalls.get(roomId)?.isActive) {
-      console.log('[VoiceCallHandler] Already in LiveKit call, declining legacy WebRTC invite');
-      await this.client.sendEvent(roomId, 'm.call.hangup', {
-        call_id: callId, party_id: 'BOT', version: '1', reason: 'user_hangup',
-      });
+      console.log('[VoiceCallHandler] Already in LiveKit call, posting fresh join link');
+      const callState = this.activeCalls.get(roomId)!;
+      const liveKitService = this.matrixService.getLiveKitService();
+      if (liveKitService && callState.livekitAlias) {
+        const token = await liveKitService.generateToken(callState.livekitAlias, sender, true, true);
+        const liveKitUrl = encodeURIComponent('wss://scottgl-aipc.taile589de.ts.net/livekit/sfu');
+        const tokenEnc = encodeURIComponent(token);
+        const joinUrl = `https://scottgl-aipc.taile589de.ts.net/call/join.html?liveKitUrl=${liveKitUrl}&token=${tokenEnc}`;
+        await this.matrixService.sendMessage(roomId, `📞 Voice call is already active — use this link to join:\n${joinUrl}`);
+      } else {
+        await this.matrixService.sendMessage(roomId, '📞 Voice call is already active. Use the join link posted earlier.');
+      }
       return;
     }
 
@@ -397,6 +405,7 @@ export class VoiceCallHandler {
 
           callState.isLiveKitCall = true;
           callState.livekitAgent = agent;
+          callState.livekitAlias = room.name;
 
           await this.initializeAudioPipeline(roomId, callState);
 
