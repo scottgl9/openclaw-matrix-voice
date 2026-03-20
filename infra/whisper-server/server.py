@@ -57,6 +57,14 @@ def transcribe():
             initial_prompt=prompt,
             beam_size=5,
             vad_filter=True,
+            vad_parameters=dict(
+                min_speech_duration_ms=250,
+                min_silence_duration_ms=200,
+                speech_pad_ms=100,
+            ),
+            no_speech_threshold=0.6,
+            log_prob_threshold=-1.0,
+            condition_on_previous_text=False,
         )
 
         text = " ".join(segment.text.strip() for segment in segments)

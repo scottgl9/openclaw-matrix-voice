@@ -67,7 +67,7 @@ export interface VadConfig {
 
 export const defaultVadConfig: VadConfig = {
   energyThreshold: 0.3,
-  silenceThresholdMs: 500,
+  silenceThresholdMs: 700,
   minSpeechDurationMs: 200,
   preRollMs: 100,
   postRollMs: 150,
@@ -76,7 +76,7 @@ export const defaultVadConfig: VadConfig = {
   adaptiveThreshold: false,
   adaptiveMultiplier: 3.0,
   adaptiveCalibrationFrames: 50, // ~1 second at 20ms frames
-  hangoverFrames: 2,
+  hangoverFrames: 5,
 };
 
 export enum VadState {

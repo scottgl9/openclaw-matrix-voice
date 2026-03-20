@@ -493,21 +493,27 @@ export class VoiceCallHandler {
     pipeline.setVadService(vadService);
     vadService.start();
 
-    // Barge-in: when user starts speaking while bot is talking, interrupt the bot
-    vadService.on('speech.start', () => {
-      if (callState.botSpeaking) {
-        callState.livekitAgent?.stopPublishing();
-        callState.turnProcessor?.cancel();
-        if (callState.ttsPlaybackTimer) clearTimeout(callState.ttsPlaybackTimer);
-        callState.botSpeaking = false;
-        console.log('[VoiceCallHandler] Barge-in: user interrupted bot');
-      }
-    });
-
     // Wire turn completion -> turn processor
     await turnProcessor.initialize();
 
     pipeline.on('turn.complete', async (event: any) => {
+      // If bot is speaking, check if this is a real barge-in or just echo
+      if (callState.botSpeaking) {
+        // Require minimum 400ms of speech to count as intentional barge-in
+        // (echo/noise produces very short turns)
+        if (event.durationMs >= 400) {
+          console.log(`[VoiceCallHandler] Barge-in: ${event.durationMs}ms speech while bot speaking`);
+          callState.livekitAgent?.stopPublishing();
+          callState.turnProcessor?.cancel();
+          if (callState.ttsPlaybackTimer) clearTimeout(callState.ttsPlaybackTimer);
+          callState.botSpeaking = false;
+          // Process this turn as the new user input
+        } else {
+          console.log(`[VoiceCallHandler] Ignoring short turn (${event.durationMs}ms) while bot speaking (echo suppression)`);
+          return;
+        }
+      }
+
       console.log('[VoiceCallHandler] Turn complete event, processing...');
 
       // Release active speaker lock in the mux so next person can speak
@@ -532,17 +538,17 @@ export class VoiceCallHandler {
           const pcmData = event.audioData.slice(44);
           console.log(`[VoiceCallHandler] TTS WAV: ${wavSampleRate}Hz, ${pcmData.length} PCM bytes`);
 
-          // Track bot speaking state for barge-in detection
+          // Track bot speaking state for barge-in and echo suppression
           callState.botSpeaking = true;
           if (callState.ttsPlaybackTimer) clearTimeout(callState.ttsPlaybackTimer);
 
           await callState.livekitAgent.publishAudioBuffer(pcmData, wavSampleRate);
 
-          // Estimate playback duration and set timer to clear botSpeaking flag
-          const durationMs = (pcmData.length / (wavSampleRate * 2)) * 1000;
+          // Keep botSpeaking true briefly after publishing to suppress
+          // echo from speakers → mic feedback loop
           callState.ttsPlaybackTimer = setTimeout(() => {
             callState.botSpeaking = false;
-          }, durationMs);
+          }, 1500);
         } else {
           await this.matrixService.sendAudio(roomId, event.audioData, event.mimeType);
         }
