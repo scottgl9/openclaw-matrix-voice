@@ -38,6 +38,9 @@ export class LiveKitAgentService extends EventEmitter {
   private connected: boolean = false;
   private silenceInterval: NodeJS.Timeout | null = null;
 
+  // Publishing interruption (barge-in)
+  private publishingAborted: boolean = false;
+
   // Reconnection state
   private reconnectAttempts: number = 0;
   private reconnecting: boolean = false;
@@ -167,6 +170,13 @@ export class LiveKitAgentService extends EventEmitter {
   }
 
   /**
+   * Stop any in-progress audio publishing (barge-in interruption).
+   */
+  stopPublishing(): void {
+    this.publishingAborted = true;
+  }
+
+  /**
    * Publish a single audio frame to the room
    */
   async publishAudioFrame(frame: any): Promise<void> {
@@ -180,6 +190,7 @@ export class LiveKitAgentService extends EventEmitter {
   /**
    * Publish a Buffer of PCM16 audio to the room.
    * Handles resampling from pipeline rate to LiveKit rate (48kHz).
+   * Audio is published in ~20ms chunks to allow mid-stream interruption (barge-in).
    */
   async publishAudioBuffer(audioData: Buffer, sampleRate: number): Promise<void> {
     if (!this.audioSource || !this.connected) {
@@ -189,6 +200,8 @@ export class LiveKitAgentService extends EventEmitter {
     const sdk = await loadRtcNode();
     if (!sdk) return;
 
+    this.publishingAborted = false;
+
     let pcmData = audioData;
     if (sampleRate !== LIVEKIT_SAMPLE_RATE) {
       pcmData = resample(audioData, sampleRate, LIVEKIT_SAMPLE_RATE, 1);
@@ -196,21 +209,33 @@ export class LiveKitAgentService extends EventEmitter {
 
     const samples = bufferToInt16Array(pcmData);
 
-    const frame = new sdk.AudioFrame(
-      samples,
-      LIVEKIT_SAMPLE_RATE,
-      1,
-      samples.length
-    );
-
-    try {
-      await this.audioSource.captureFrame(frame);
-    } catch (error: any) {
-      if (error.message?.includes('InvalidState')) {
-        console.warn('[LiveKitAgent] AudioSource InvalidState — republishing track');
-        loadRtcNode().then(sdk => sdk && this.republishAudioTrack(sdk)).catch(() => {});
+    // Publish in ~20ms chunks (960 samples at 48kHz) for barge-in support
+    const chunkSize = Math.floor(LIVEKIT_SAMPLE_RATE * 0.02); // 960 samples = 20ms
+    for (let offset = 0; offset < samples.length; offset += chunkSize) {
+      if (this.publishingAborted) {
+        console.log(`[LiveKitAgent] Publishing aborted (barge-in) at ${Math.round(offset / samples.length * 100)}%`);
+        return;
       }
-      throw error;
+
+      const end = Math.min(offset + chunkSize, samples.length);
+      const chunk = samples.slice(offset, end);
+
+      const frame = new sdk.AudioFrame(
+        chunk,
+        LIVEKIT_SAMPLE_RATE,
+        1,
+        chunk.length
+      );
+
+      try {
+        await this.audioSource.captureFrame(frame);
+      } catch (error: any) {
+        if (error.message?.includes('InvalidState')) {
+          console.warn('[LiveKitAgent] AudioSource InvalidState — republishing track');
+          loadRtcNode().then(sdk => sdk && this.republishAudioTrack(sdk)).catch(() => {});
+        }
+        throw error;
+      }
     }
   }
 

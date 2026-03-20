@@ -1,8 +1,12 @@
 node_modules/
 dist/
+livekit/
+matrix-js-sdk/
 .env
 bot-storage.json
 data/
 test-data/
 *.tsbuildinfo
+*.mp3
+*.wav
 voice-bot-credentials.txt

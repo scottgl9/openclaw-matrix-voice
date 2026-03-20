@@ -97,13 +97,13 @@ export const config: Config = {
   },
   vad: {
     energyThreshold: parseFloat(process.env.VAD_ENERGY_THRESHOLD || '0.3'),
-    silenceThresholdMs: parseInt(process.env.VAD_SILENCE_THRESHOLD_MS || '800', 10),
+    silenceThresholdMs: parseInt(process.env.VAD_SILENCE_THRESHOLD_MS || '500', 10),
     minSpeechDurationMs: parseInt(process.env.VAD_MIN_SPEECH_MS || '200', 10),
     preRollMs: parseInt(process.env.VAD_PRE_ROLL_MS || '100', 10),
-    postRollMs: parseInt(process.env.VAD_POST_ROLL_MS || '300', 10),
+    postRollMs: parseInt(process.env.VAD_POST_ROLL_MS || '150', 10),
     adaptiveThreshold: process.env.VAD_ADAPTIVE_THRESHOLD === 'true',
     adaptiveMultiplier: parseFloat(process.env.VAD_ADAPTIVE_MULTIPLIER || '3.0'),
-    hangoverFrames: parseInt(process.env.VAD_HANGOVER_FRAMES || '0', 10),
+    hangoverFrames: parseInt(process.env.VAD_HANGOVER_FRAMES || '2', 10),
     debug: process.env.VAD_DEBUG === 'true',
   },
 };

@@ -42,6 +42,7 @@ export class TurnProcessorService extends EventEmitter {
   private openClawService: OpenClawService;
   private ttsService: ChatterboxTTSService;
   private currentTurnId: string | null = null;
+  private cancelled: boolean = false;
 
   constructor(
     openClawService: OpenClawService,
@@ -83,6 +84,18 @@ export class TurnProcessorService extends EventEmitter {
   }
 
   /**
+   * Cancel the current turn processing (used for barge-in interruption).
+   */
+  cancel(): void {
+    if (this.state !== TurnProcessingState.IDLE) {
+      console.log(`[TurnProcessor] Cancelling turn ${this.currentTurnId}`);
+      this.cancelled = true;
+      this.state = TurnProcessingState.IDLE;
+      this.currentTurnId = null;
+    }
+  }
+
+  /**
    * Handle turn completion event from VAD/AudioPipeline.
    * This is the main entry point for processing a completed speech turn.
    */
@@ -97,11 +110,17 @@ export class TurnProcessorService extends EventEmitter {
     }
 
     this.currentTurnId = turnId;
+    this.cancelled = false;
     this.setState(TurnProcessingState.TRANSCRIBING);
 
     try {
       // Step 1: Transcribe audio using STT
       const sttResult = await this.transcribeTurn(turnId, frames);
+
+      if (this.cancelled) {
+        console.log(`[TurnProcessor] Turn ${turnId} cancelled after STT`);
+        return;
+      }
 
       if (!sttResult.success) {
         throw new Error(sttResult.error || 'STT transcription failed');
@@ -118,6 +137,11 @@ export class TurnProcessorService extends EventEmitter {
       // Step 2: Process text through OpenClaw (with retry)
       const openClawResult = await this.processText(transcribedText);
 
+      if (this.cancelled) {
+        console.log(`[TurnProcessor] Turn ${turnId} cancelled after LLM`);
+        return;
+      }
+
       if (!openClawResult.success) {
         throw new Error(openClawResult.error || 'OpenClaw processing failed');
       }
@@ -126,6 +150,11 @@ export class TurnProcessorService extends EventEmitter {
 
       // Step 3: Convert response to speech using TTS (with retry)
       const ttsResult = await this.generateTTS(responseText);
+
+      if (this.cancelled) {
+        console.log(`[TurnProcessor] Turn ${turnId} cancelled after TTS`);
+        return;
+      }
 
       if (!ttsResult.success) {
         throw new Error(ttsResult.error || 'TTS generation failed');
@@ -138,6 +167,10 @@ export class TurnProcessorService extends EventEmitter {
       this.currentTurnId = null;
 
     } catch (error: any) {
+      if (this.cancelled) {
+        console.log(`[TurnProcessor] Turn ${turnId} cancelled during error recovery`);
+        return;
+      }
       console.error(`[TurnProcessor] Error processing turn ${turnId}:`, error.message);
       this.emitError(turnId, error.message);
       this.setState(TurnProcessingState.IDLE);

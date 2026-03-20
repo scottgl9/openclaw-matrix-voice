@@ -22,6 +22,8 @@ export interface CallState {
   livekitAgent?: LiveKitAgentService;
   isLiveKitCall?: boolean;
   livekitAlias?: string;
+  botSpeaking?: boolean;
+  ttsPlaybackTimer?: NodeJS.Timeout;
 }
 
 export class VoiceCallHandler {
@@ -248,20 +250,10 @@ export class VoiceCallHandler {
       reason: 'user_hangup',
     });
 
-    // If already in a LiveKit call, post a fresh join link — user clicked legacy call by mistake
+    // If already in a LiveKit call, tell user to use the native Join Call button
     if (this.activeCalls.get(roomId)?.isActive) {
-      console.log('[VoiceCallHandler] Already in LiveKit call, posting fresh join link');
-      const callState = this.activeCalls.get(roomId)!;
-      const liveKitService = this.matrixService.getLiveKitService();
-      if (liveKitService && callState.livekitAlias) {
-        const token = await liveKitService.generateToken(callState.livekitAlias, sender, true, true);
-        const liveKitUrl = encodeURIComponent('wss://scottgl-aipc.taile589de.ts.net/livekit/sfu');
-        const tokenEnc = encodeURIComponent(token);
-        const joinUrl = `https://scottgl-aipc.taile589de.ts.net/call/join.html?liveKitUrl=${liveKitUrl}&token=${tokenEnc}`;
-        await this.matrixService.sendMessage(roomId, `📞 Voice call is already active — use this link to join:\n${joinUrl}`);
-      } else {
-        await this.matrixService.sendMessage(roomId, '📞 Voice call is already active. Use the join link posted earlier.');
-      }
+      console.log('[VoiceCallHandler] Already in LiveKit call');
+      await this.matrixService.sendMessage(roomId, 'Voice call is already active. Click **Join Call** above to connect.');
       return;
     }
 
@@ -446,20 +438,9 @@ export class VoiceCallHandler {
 
     this.activeCalls.set(roomId, callState);
 
-    let message = 'Voice call started. Send messages and I\'ll respond.';
-    if (callState.isLiveKitCall && callState.livekitAlias) {
-      const liveKitService = this.matrixService.getLiveKitService();
-      if (liveKitService) {
-        try {
-          const userToken = await liveKitService.generateToken(callState.livekitAlias, 'user', true, true);
-          const livekitWsUrl = encodeURIComponent('wss://scottgl-aipc.taile589de.ts.net/livekit/sfu');
-          const joinUrl = `https://scottgl-aipc.taile589de.ts.net/call/join.html?liveKitUrl=${livekitWsUrl}&token=${encodeURIComponent(userToken)}`;
-          message = `📞 Voice call ready! Join here:\n${joinUrl}\n\nI'm listening with Whisper and will respond with Chatterbox TTS.`;
-        } catch (e: any) {
-          message = 'LiveKit voice call started (VAD-driven). I\'m listening...';
-        }
-      }
-    }
+    const message = callState.isLiveKitCall
+      ? 'Voice call ready! Click **Join Call** above to connect.'
+      : 'Voice call started. Send messages and I\'ll respond.';
 
     await this.matrixService.sendMessage(roomId, message);
   }
@@ -524,6 +505,17 @@ export class VoiceCallHandler {
     pipeline.setVadService(vadService);
     vadService.start();
 
+    // Barge-in: when user starts speaking while bot is talking, interrupt the bot
+    vadService.on('speech.start', () => {
+      if (callState.botSpeaking) {
+        callState.livekitAgent?.stopPublishing();
+        callState.turnProcessor?.cancel();
+        if (callState.ttsPlaybackTimer) clearTimeout(callState.ttsPlaybackTimer);
+        callState.botSpeaking = false;
+        console.log('[VoiceCallHandler] Barge-in: user interrupted bot');
+      }
+    });
+
     // Wire turn completion -> turn processor
     await turnProcessor.initialize();
 
@@ -551,11 +543,23 @@ export class VoiceCallHandler {
           // Strip WAV header (44 bytes) to get raw PCM
           const pcmData = event.audioData.slice(44);
           console.log(`[VoiceCallHandler] TTS WAV: ${wavSampleRate}Hz, ${pcmData.length} PCM bytes`);
+
+          // Track bot speaking state for barge-in detection
+          callState.botSpeaking = true;
+          if (callState.ttsPlaybackTimer) clearTimeout(callState.ttsPlaybackTimer);
+
           await callState.livekitAgent.publishAudioBuffer(pcmData, wavSampleRate);
+
+          // Estimate playback duration and set timer to clear botSpeaking flag
+          const durationMs = (pcmData.length / (wavSampleRate * 2)) * 1000;
+          callState.ttsPlaybackTimer = setTimeout(() => {
+            callState.botSpeaking = false;
+          }, durationMs);
         } else {
           await this.matrixService.sendAudio(roomId, event.audioData, event.mimeType);
         }
       } catch (error: any) {
+        callState.botSpeaking = false;
         console.error('[VoiceCallHandler] Error sending TTS audio:', error.message);
         // Always send error feedback to user
         await this.matrixService.sendMessage(roomId, `Could not send audio response: ${event.responseText}`).catch(() => {});
@@ -590,6 +594,7 @@ export class VoiceCallHandler {
     const callState = this.activeCalls.get(roomId);
     if (callState) {
       callState.isActive = false;
+      if (callState.ttsPlaybackTimer) clearTimeout(callState.ttsPlaybackTimer);
 
       if (callState.audioPipeline) {
         try {

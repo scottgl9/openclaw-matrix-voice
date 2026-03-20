@@ -267,8 +267,8 @@ export class AudioPipelineService extends EventEmitter {
         this.processFrameThroughVAD(frame);
       }
 
-      // Forward to egress (loopback path)
-      if (this.egress?.isActive()) {
+      // Forward to egress only in loopback/test mode (not in production LiveKit mode)
+      if (this.config.loopbackEnabled && this.egress?.isActive()) {
         try {
           await this.egress.sendFrame(frame);
         } catch (error: any) {
