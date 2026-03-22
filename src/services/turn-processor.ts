@@ -152,6 +152,14 @@ export class TurnProcessorService extends EventEmitter {
         throw new Error(openClawResult.error || 'OpenClaw processing failed');
       }
 
+      // Agent chose to stay silent — skip TTS entirely
+      if (openClawResult.silent) {
+        console.log(`[TurnProcessor] Agent silent (NO_REPLY), skipping TTS for turn ${turnId}`);
+        this.setState(TurnProcessingState.IDLE);
+        this.currentTurnId = null;
+        return;
+      }
+
       const responseText = openClawResult.response!;
 
       // Step 3: Convert response to speech using TTS (with retry)

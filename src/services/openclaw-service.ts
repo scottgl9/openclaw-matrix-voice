@@ -8,8 +8,18 @@ const log = createLogger('OpenClaw');
 export interface OpenClawResponse {
   success: boolean;
   response?: string;
+  silent?: boolean;  // true when agent chose to stay silent (NO_REPLY)
   error?: string;
 }
+
+// Strings the gateway emits when an agent intentionally returns NO_REPLY
+const SILENT_RESPONSES = new Set([
+  'NO_REPLY',
+  'No response from OpenClaw.',
+]);
+
+// Key phrase the agent can return to explicitly stay silent
+const SILENT_TOKEN = '[SILENT]';
 
 interface ChatCompletionMessage {
   role: 'system' | 'user' | 'assistant';
@@ -103,9 +113,15 @@ export class OpenClawService {
         this.trimHistory();
       }
 
+      // Agent chose to stay silent — either NO_REPLY (stripped by gateway) or explicit [SILENT] token
+      const trimmed = assistantMessage.trim();
+      if (!trimmed || SILENT_RESPONSES.has(trimmed) || trimmed === SILENT_TOKEN) {
+        return { success: true, silent: true };
+      }
+
       return {
         success: true,
-        response: assistantMessage || 'Sorry, I didn\'t catch that. Could you repeat?',
+        response: assistantMessage,
       };
     } catch (error) {
       const axiosError = error as AxiosError;

@@ -1,198 +1,188 @@
-# OpenClaw Matrix Voice
+# openclaw-matrix-voice
 
-Matrix bot with voice call support using Matrix SDK, LiveKit, Whisper STT, and Chatterbox TTS.
-Integrates with the [OpenClaw](https://openclaw.ai) gateway for LLM responses via the OpenAI-compatible chat completions API.
+A Matrix voice bot that joins Element Call rooms, listens via speech-to-text, routes through the [OpenClaw](https://openclaw.ai) AI gateway, and responds with synthesized speech.
 
-## Status: Phase 8 - Service Setup & Voice Configuration
+---
 
-### Recent (Phase 8)
-- **Voice-optimized system prompt**: Configurable via `OPENCLAW_SYSTEM_PROMPT` env var
-- **Conversation history limits**: Sliding window (default 20 messages) via `MAX_CONVERSATION_HISTORY`
-- **Service setup documentation**: Comprehensive guides for all services
+## Features
 
-### Phase 7
-- **OpenClaw gateway integration**: Uses `/v1/chat/completions` endpoint with conversation history
-- **Local Whisper STT**: Bundled `faster-whisper` server for CPU-based speech-to-text
-- **Text-simulated voice calls**: Send messages in Matrix during active calls, bot responds via OpenClaw
-- **Matrix bot registered**: Dedicated `@voice-bot` account for voice call handling
+- **Real-time voice calls** — joins MatrixRTC/LiveKit rooms as a participant; speaks and listens
+- **Speech-to-text** — pluggable STT adapter; ships with a Whisper HTTP adapter (compatible with faster-whisper servers)
+- **Text-to-speech** — Chatterbox TTS and Kokoro TTS supported out of the box
+- **OpenClaw agent routing** — routes turns through any configured OpenClaw agent via the standard `/v1/chat/completions` endpoint
+- **Voice Activity Detection** — energy-based VAD with echo suppression (suppresses VAD during TTS playback to prevent the bot hearing itself)
+- **Silent response control** — agent returns `[SILENT]` to stay quiet; gateway `NO_REPLY` fallback also suppressed
+- **Conversation history** — sliding window context window per call session
+- **Element Call visibility** — publishes a dummy video track and correct `org.matrix.msc3401.call.member` state events so the bot appears as a participant tile
+- **Latency profiling** — STT / LLM / TTS / Total ms logged per turn with grade (EXCELLENT / GOOD / ACCEPTABLE / SLOW)
+- **Health endpoint** — `GET /health` for service monitoring
 
-### Earlier Phases
-- Whisper STT adapter, LiveKit agent service, pluggable audio transport
-- MatrixRTC auto-join, audio resampler, VAD improvements
-- Matrix call event handling, call session management
-- LiveKit room/token management
-- VAD with energy-based speech detection and turn segmentation
-- STT adapter interface, turn processor pipeline
+---
+
+## Requirements
+
+- Node.js 18+
+- Matrix homeserver with a dedicated bot account
+- OpenClaw gateway running locally
+- LiveKit server (e.g. `lk` CLI or self-hosted)
+- Whisper-compatible STT server (faster-whisper, whisper.cpp, etc.)
+- TTS server (Chatterbox or Kokoro)
 
 ---
 
 ## Quick Start
 
-### Prerequisites
-- Node.js 18+
-- Matrix homeserver with a bot account
-- OpenClaw gateway running (default: `http://localhost:18789`)
-- (Optional) LiveKit server for real-time voice calls — see [LiveKit Setup](docs/LIVEKIT_SETUP.md)
-- (Optional) TTS service for audio responses — see [TTS Setup](docs/TTS_SETUP.md)
-
-> **Full setup guide**: See [docs/SERVICES_GUIDE.md](docs/SERVICES_GUIDE.md) for getting all services running end-to-end.
-
-### Setup
 ```bash
+git clone <repo>
+cd openclaw-matrix-voice
 npm install
-cp .env.example .env  # Or create .env manually (see below)
+cp .env.example .env   # edit with your values
 npm run build
+npm start
 ```
 
-### Environment Variables
-```bash
-# OpenClaw Gateway (required)
-OPENCLAW_API_URL=http://localhost:18789
-OPENCLAW_API_TOKEN=your-gateway-token
+---
 
-# Matrix (required)
-MATRIX_HOMESERVER=https://your-homeserver.example.com
-MATRIX_USER_ID=@voice-bot:your-homeserver.example.com
-MATRIX_ACCESS_TOKEN=syt_...
+## Configuration
 
-# Whisper STT (optional - local faster-whisper server)
-WHISPER_URL=http://localhost:8090
-WHISPER_MODEL=tiny
-WHISPER_LANGUAGE=en
+All configuration is via environment variables (`.env` file or shell).
 
-# Voice agent (optional)
-OPENCLAW_SYSTEM_PROMPT="You are a helpful voice assistant..."
-MAX_CONVERSATION_HISTORY=20
+### Required
 
-# TTS (optional)
-CHATTERBOX_TTS_URL=http://localhost:8000/tts
+| Variable | Description |
+|---|---|
+| `MATRIX_HOMESERVER` | Matrix homeserver URL, e.g. `https://matrix.example.com` |
+| `MATRIX_USER_ID` | Bot's Matrix user ID, e.g. `@crowbar:matrix.example.com` |
+| `MATRIX_ACCESS_TOKEN` | Bot's Matrix access token |
+| `OPENCLAW_API_URL` | OpenClaw gateway URL, e.g. `http://localhost:18789` |
+| `OPENCLAW_API_TOKEN` | OpenClaw gateway auth token |
 
-# LiveKit (optional - for real-time voice)
-LIVEKIT_ENABLED=true
-LIVEKIT_URL=ws://localhost:7880
-LIVEKIT_API_KEY=devkey
-LIVEKIT_API_SECRET=devsecret
+### Voice Agent
 
-# Server
-SERVER_PORT=3002
-SERVER_HOST=0.0.0.0
-```
+| Variable | Default | Description |
+|---|---|---|
+| `OPENCLAW_AGENT_ID` | `main` | OpenClaw agent ID to route voice turns through |
+| `OPENCLAW_SYSTEM_PROMPT` | _(none)_ | System prompt injected at the start of every turn |
+| `MAX_CONVERSATION_HISTORY` | `20` | Max messages kept in conversation context per call |
 
-### Run
-```bash
-npm run dev     # Development with tsx
-npm start       # Production (compiled)
-```
+### STT (Whisper)
 
-### Local Whisper STT Server
-A bundled faster-whisper server is included for local speech-to-text:
+| Variable | Default | Description |
+|---|---|---|
+| `WHISPER_URL` | `http://localhost:8090` | Whisper-compatible STT server URL |
+| `WHISPER_MODEL` | `turbo` | Model name sent in the request |
+| `WHISPER_LANGUAGE` | `en` | Language hint |
 
-```bash
-# Create venv and install dependencies
-python3 -m venv ~/.local/share/whisper-venv
-~/.local/share/whisper-venv/bin/pip install faster-whisper flask
+### TTS
 
-# Run (downloads tiny model on first start)
-WHISPER_MODEL_SIZE=tiny WHISPER_PORT=8090 \
-  ~/.local/share/whisper-venv/bin/python3 infra/whisper-server/server.py
-```
+| Variable | Default | Description |
+|---|---|---|
+| `CHATTERBOX_TTS_URL` | `http://localhost:8000/tts` | Chatterbox TTS endpoint |
+| `KOKORO_TTS_URL` | _(unset)_ | Kokoro TTS endpoint (takes precedence over Chatterbox when set) |
+| `KOKORO_VOICE` | `af_bella` | Kokoro voice name |
 
-Models: `tiny` (fast, less accurate), `base`, `small`, `medium`, `large-v3` (slow, most accurate).
+### LiveKit
 
-### OpenClaw Gateway Setup
-The bot uses OpenClaw's `/v1/chat/completions` endpoint. Enable it in `~/.openclaw/openclaw.json`:
+| Variable | Default | Description |
+|---|---|---|
+| `LIVEKIT_ENABLED` | `true` | Enable LiveKit / MatrixRTC voice support |
+| `LIVEKIT_URL` | `ws://localhost:7880` | LiveKit server WebSocket URL |
+| `LIVEKIT_API_KEY` | `devkey` | LiveKit API key |
+| `LIVEKIT_API_SECRET` | `devsecret` | LiveKit API secret |
 
-```json
-{
-  "gateway": {
-    "http": {
-      "endpoints": {
-        "chatCompletions": {
-          "enabled": true
-        }
-      }
-    }
-  }
-}
-```
+### Server
 
-Then restart the gateway: `openclaw gateway start`
+| Variable | Default | Description |
+|---|---|---|
+| `SERVER_PORT` | `3002` | Health server port |
+| `SERVER_HOST` | `0.0.0.0` | Health server bind address |
+
+---
 
 ## How It Works
 
-### Text-Simulated Call Flow
 ```
-User sends "/call start" in Matrix room
-  -> Bot activates call session
-  -> User sends text messages
-  -> OpenClaw gateway /v1/chat/completions -> LLM response
-  -> (If TTS available) Chatterbox TTS -> audio uploaded to Matrix
-  -> (If TTS unavailable) Text response sent to Matrix
-```
-
-### Real-Time Voice Call Flow (LiveKit)
-```
-User joins voice call in Element (MatrixRTC)
-  -> Bot detects m.call.member state event
-  -> LiveKitAgentService joins room as participant
-  -> Audio frames (48kHz) -> resample to 16kHz
-  -> VAD detects speech turns
-  -> Whisper STT -> text
-  -> OpenClaw gateway -> LLM response
-  -> Chatterbox TTS -> audio
-  -> Resample to 48kHz -> LiveKit publish
-  -> User hears bot response
+User joins Element Call room (MatrixRTC/LiveKit)
+  → Bot detects org.matrix.msc3401.call.member state event
+  → Bot joins LiveKit room as a participant
+  → Audio frames (48kHz) resampled to 16kHz
+  → VAD detects speech turns; echo suppression active during TTS playback
+  → Whisper STT transcribes the turn
+  → OpenClaw gateway /v1/chat/completions → agent response
+      → [SILENT] or NO_REPLY  → skip TTS, bot stays quiet
+      → Normal response        → TTS synthesis → resample to 48kHz → LiveKit publish
+  → User hears the response
 ```
 
-## Matrix Commands
-- `/call start` - Start a text-simulated voice call
-- `/call start livekit` - Start a LiveKit voice call
-- `/call end` - End a voice call
-- `/call status` - Show call status
+---
+
+## Silent Responses
+
+The agent can choose to stay silent instead of speaking. Return exactly `[SILENT]` as the full response and the bot will skip TTS and play no audio.
+
+The gateway's empty-response fallback (`"No response from OpenClaw."`) is also treated as silent and never spoken aloud.
+
+This is useful for:
+- Garbled or unintelligible transcriptions
+- Ambient noise picked up by VAD
+- Multi-speaker situations where the bot wasn't addressed
+
+---
 
 ## Project Structure
 
 ```
 src/
 ├── handlers/
-│   └── voice-call-handler.ts      # Call lifecycle + MatrixRTC
+│   └── voice-call-handler.ts       # Call lifecycle + MatrixRTC events
 ├── services/
-│   ├── matrix-client-service.ts    # Matrix client wrapper
-│   ├── openclaw-service.ts         # OpenClaw chat completions client
+│   ├── matrix-client-service.ts    # Matrix SDK wrapper
+│   ├── openclaw-service.ts         # OpenClaw chat completions + silence detection
 │   ├── livekit-service.ts          # LiveKit room/token management
-│   ├── livekit-agent-service.ts    # Bot as LiveKit participant
+│   ├── livekit-agent-service.ts    # Bot as LiveKit participant (audio in/out)
 │   ├── livekit-audio-transport.ts  # AudioIngress/Egress for LiveKit
 │   ├── audio-pipeline.ts           # Pluggable audio frame pipeline
 │   ├── audio-resampler.ts          # PCM16 sample rate conversion
 │   ├── vad-service.ts              # Voice Activity Detection
-│   ├── stt-adapter.ts              # STT interface + MockSTTAdapter
-│   ├── whisper-stt-adapter.ts      # Whisper STT via HTTP API
-│   ├── turn-processor.ts           # VAD -> STT -> LLM -> TTS
-│   ├── chatterbox-tts-service.ts   # Chatterbox TTS API
+│   ├── stt-adapter.ts              # STT interface
+│   ├── whisper-stt-adapter.ts      # Whisper STT via HTTP
+│   ├── turn-processor.ts           # VAD → STT → LLM → TTS pipeline
+│   ├── chatterbox-tts-service.ts   # Chatterbox TTS
 │   ├── health-server.ts            # Health check endpoint
 │   └── call-store.ts               # Call session persistence
 ├── config/
-│   └── index.ts                    # Environment config + validation
+│   └── index.ts                    # Env config + validation
 ├── utils/
-│   ├── logger.ts                   # Structured logging
-│   ├── rate-limiter.ts             # Token bucket rate limiter
-│   └── retry.ts                    # Retry with backoff
-└── index.ts                        # Entry point
-
-infra/
-├── whisper-server/
-│   └── server.py                   # Local faster-whisper HTTP server
-└── mock-whisper/
-    └── server.mjs                  # Mock Whisper for testing
+│   ├── logger.ts
+│   ├── rate-limiter.ts
+│   └── retry.ts
+└── index.ts
+server/
+├── whisper_server.py               # faster-whisper HTTP server
+├── kokoro_server.py                # Kokoro TTS HTTP server
+└── parakeet_server.py              # NVIDIA Parakeet STT server (optional)
 ```
+
+---
 
 ## Development
 
 ```bash
-npm run build       # TypeScript compilation
-npm test            # Run tests with Vitest
+npm run build       # TypeScript compile
+npm run dev         # Run with tsx (no compile step)
+npm test            # Vitest
 npm run test:watch  # Watch mode
 ```
+
+---
+
+## Further Reading
+
+- [LiveKit Setup](LIVEKIT_SETUP.md)
+- [TTS Setup](TTS_SETUP.md)
+- [Services Guide](SERVICES_GUIDE.md)
+
+---
 
 ## License
 
