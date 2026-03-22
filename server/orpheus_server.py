@@ -10,7 +10,7 @@ Setup:
     # 1. Download the GGUF model (choose one):
     #    Q4_K_M (recommended — best quality/size tradeoff, ~2GB):
     huggingface-cli download isaiahbjork/orpheus-3b-0.1-ft-Q4_K_M-GGUF \
-        orpheus-3b-0.1-ft-q4_k_m.gguf --local-dir /home/scottgl/.local/share/orpheus/
+        orpheus-3b-0.1-ft-q4_k_m.gguf --local-dir ~/.local/share/orpheus/
 
     # 2. Install llama-cpp-python with CUDA:
     CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --upgrade
@@ -61,7 +61,7 @@ log = logging.getLogger("orpheus_server")
 
 MODEL_PATH = os.environ.get(
     "ORPHEUS_MODEL_PATH",
-    "/home/scottgl/.local/share/orpheus/orpheus-3b-0.1-ft-q4_k_m.gguf",
+    os.path.expanduser("~/.local/share/orpheus/orpheus-3b-0.1-ft-q4_k_m.gguf"),
 )
 PORT = int(os.environ.get("ORPHEUS_PORT", "8003"))
 HOST = os.environ.get("ORPHEUS_HOST", "0.0.0.0")
@@ -85,7 +85,7 @@ def load_model():
             f"Orpheus model not found at {MODEL_PATH}\n"
             f"Download with:\n"
             f"  huggingface-cli download isaiahbjork/orpheus-3b-0.1-ft-Q4_K_M-GGUF "
-            f"orpheus-3b-0.1-ft-q4_k_m.gguf --local-dir /home/scottgl/.local/share/orpheus/"
+            f"orpheus-3b-0.1-ft-q4_k_m.gguf --local-dir ~/.local/share/orpheus/"
         )
 
     log.info(f"Loading Orpheus model: {MODEL_PATH} (gpu_layers={GPU_LAYERS})")
