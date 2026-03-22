@@ -102,8 +102,11 @@ class TTSRequest(BaseModel):
 
 
 def pcm_to_wav(pcm_samples, sample_rate: int) -> bytes:
-    """Convert raw float32 numpy array to WAV bytes."""
+    """Convert raw float32 numpy array or torch Tensor to WAV bytes."""
     import numpy as np
+    # Handle torch Tensor
+    if hasattr(pcm_samples, 'numpy'):
+        pcm_samples = pcm_samples.detach().cpu().numpy()
     # Clamp and convert to int16
     pcm_int16 = np.clip(pcm_samples, -1.0, 1.0)
     pcm_int16 = (pcm_int16 * 32767).astype(np.int16)
@@ -147,11 +150,13 @@ async def tts(req: TTSRequest):
         import numpy as np
         log.info(f'Synthesizing ({len(text)} chars): "{text[:60]}{"..." if len(text) > 60 else ""}"')
 
-        # Collect all audio chunks
+        # Collect all audio chunks (may be torch Tensors or numpy arrays)
         audio_chunks = []
         generator = kokoro_pipeline(text, voice=voice, speed=speed)
         for _, _, audio in generator:
             if audio is not None:
+                if hasattr(audio, 'numpy'):
+                    audio = audio.detach().cpu().numpy()
                 audio_chunks.append(audio)
 
         if not audio_chunks:

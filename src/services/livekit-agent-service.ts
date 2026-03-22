@@ -35,6 +35,8 @@ export class LiveKitAgentService extends EventEmitter {
   private room: any = null;
   private audioSource: any = null;
   private localAudioTrack: any = null;
+  private videoSource: any = null;
+  private localVideoTrack: any = null;
   private connected: boolean = false;
   private silenceInterval: NodeJS.Timeout | null = null;
 
@@ -101,6 +103,9 @@ export class LiveKitAgentService extends EventEmitter {
     publishOptions.source = sdk.TrackSource.SOURCE_MICROPHONE;
     await this.room.localParticipant.publishTrack(this.localAudioTrack, publishOptions);
 
+    // Publish a silent dummy video track so Element Call renders the bot as a visible participant
+    await this.publishDummyVideoTrack(sdk);
+
     console.log('[LiveKitAgent] Joined room and published audio track');
     this.startSilenceHeartbeat();
   }
@@ -121,6 +126,31 @@ export class LiveKitAgentService extends EventEmitter {
     await this.room.localParticipant.publishTrack(this.localAudioTrack, publishOptions);
     console.log('[LiveKitAgent] Republished audio track with fresh AudioSource');
     this.startSilenceHeartbeat();
+  }
+
+  /** Publish a 1x1 black video track so Element Call renders the bot as a visible participant */
+  private async publishDummyVideoTrack(sdk: any): Promise<void> {
+    try {
+      this.videoSource = new sdk.VideoSource(160, 120);
+      this.localVideoTrack = sdk.LocalVideoTrack.createVideoTrack('bot-video', this.videoSource);
+
+      const videoOptions = new sdk.TrackPublishOptions();
+      videoOptions.source = sdk.TrackSource.SOURCE_CAMERA;
+      await this.room.localParticipant.publishTrack(this.localVideoTrack, videoOptions);
+
+      // Send a single black 160x120 frame to initialize the stream
+      const pixels = new Uint8Array(160 * 120 * 4); // RGBA all zeros = black
+      const blackFrame = new sdk.VideoFrame(
+        pixels,
+        160,
+        120,
+        sdk.VideoBufferType.RGBA
+      );
+      await this.videoSource.captureFrame(blackFrame);
+      console.log('[LiveKitAgent] Published dummy video track');
+    } catch (err: any) {
+      console.warn('[LiveKitAgent] Could not publish dummy video track:', err.message);
+    }
   }
 
   /** Send silent frames every 200ms to keep the AudioSource alive */

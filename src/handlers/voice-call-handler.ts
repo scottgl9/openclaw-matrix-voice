@@ -221,7 +221,8 @@ export class VoiceCallHandler {
         if (existing?.isActive && existing?.isLiveKitCall) {
           const existingAlias = existing.livekitAlias;
           if (existingAlias === livekitAlias) {
-            console.log('[VoiceCallHandler] Already in this LiveKit call, skipping');
+            console.log('[VoiceCallHandler] Already in this LiveKit call — re-publishing call member events');
+            await this.publishCallMemberEvents(roomId, livekitServiceUrl, livekitAlias, 3600);
             return;
           }
           console.log(`[VoiceCallHandler] Switching to caller's LiveKit room: ${livekitAlias}`);
@@ -708,6 +709,7 @@ export class VoiceCallHandler {
    */
   private async publishCallMemberEvents(roomId: string, livekitServiceUrl: string, livekitAlias: string, expiresSeconds: number): Promise<void> {
     const botUserId = await this.client.getUserId();
+    const sessionId = 'VOICE_BOT_SESSION';
 
     // Stable format (m.call.member)
     await this.client.sendStateEvent(roomId, 'm.call.member', botUserId, {
@@ -716,12 +718,16 @@ export class VoiceCallHandler {
         scope: 'm.room',
         application: 'm.call',
         device_id: 'VOICE_BOT',
+        session_id: sessionId,
         expires: Math.floor(Date.now() / 1000) + expiresSeconds,
         foci_active: [{
           type: 'livekit',
           livekit_service_url: livekitServiceUrl,
           livekit_alias: livekitAlias,
         }],
+        feeds: [
+          { purpose: 'm.usermedia', audioMuted: false, videoMuted: false },
+        ],
       }],
     });
 
@@ -732,6 +738,8 @@ export class VoiceCallHandler {
       call_id: '',
       scope: 'm.room',
       device_id: 'VOICE_BOT',
+      session_id: sessionId,
+      membershipID: `${botUserId}:VOICE_BOT`,
       expires: expiresSeconds * 1000,
       focus_active: {
         type: 'livekit',
@@ -742,6 +750,10 @@ export class VoiceCallHandler {
         livekit_service_url: livekitServiceUrl,
         livekit_alias: livekitAlias,
       }],
+      'feeds': [
+        { purpose: 'm.usermedia', audioMuted: false, videoMuted: false },
+      ],
+      'm.call.intent': 'video',
     });
 
     console.log(`[VoiceCallHandler] Published call member events (stable + MSC3401), LiveKit alias: ${livekitAlias}`);

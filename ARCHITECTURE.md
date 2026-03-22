@@ -20,6 +20,7 @@ OpenClaw Matrix Voice is a Matrix bot that provides voice call functionality via
 - Manages active call sessions per room
 - Handles `/call start`, `/call end`, `/call status` commands
 - Detects MatrixRTC `m.call.member` state events and auto-joins LiveKit calls
+- Publishes `m.call.member` state event with `m.call.intent: "video"`, `session_id`, `membershipID`, and `feeds` required by Element Call
 - Creates and wires AudioPipeline with LiveKit transport or loopback
 - Routes TTS audio output to LiveKit (real-time) or Matrix (file upload)
 
@@ -49,6 +50,7 @@ interface CallState {
 - Creates `AudioStream` from subscribed tracks (async iterable)
 - Resamples audio: 48kHz (LiveKit) <-> 16kHz (pipeline)
 - Publishes bot audio via `AudioSource` + `LocalAudioTrack`
+- Publishes a dummy 160×120 black `VideoSource` + `LocalVideoTrack` (required — Element Call will not render audio-only participants)
 - Emits `audio.frame` events for pipeline consumption
 
 **Audio Flow**:
@@ -248,3 +250,22 @@ User: /call start
 - `axios` - HTTP client
 - `wavefile` - WAV file creation
 - `dotenv` - Environment config
+
+## Element Call Compatibility Notes
+
+Element Call has specific requirements for rendering participants. Omitting any of these will cause the bot to be silently invisible or inaudible:
+
+### Required `org.matrix.msc3401.call.member` fields
+| Field | Value | Why |
+|-------|-------|-----|
+| `m.call.intent` | `"video"` | **Critical** — Element Call filters out participants without this |
+| `session_id` | stable string (e.g. `"VOICE_BOT_SESSION"`) | Participant identity matching |
+| `membershipID` | `"${userId}:${deviceId}"` | Newer Element Call versions use this to map LiveKit → Matrix identity |
+| `feeds` | `[{purpose: "m.usermedia", audioMuted: false, videoMuted: false}]` | Declares published media tracks |
+
+### Required LiveKit tracks
+- **Video track required**: Even for audio-only bots, a dummy video track must be published (`VideoSource(160, 120)` with one black frame). Element Call will not subscribe to audio from participants with no video track.
+
+### Whisper STT + VAD
+- Do **not** enable `vad_filter=True` in faster-whisper when the TypeScript VAD is already pre-gating audio. Double VAD causes Whisper to classify pre-gated speech clips as non-speech and return empty strings silently.
+- Pick one VAD layer: TypeScript (upstream) or faster-whisper (upstream). Default: TypeScript only.

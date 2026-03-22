@@ -231,5 +231,38 @@ npm run build && npm start
 
 1. Set `LIVEKIT_ENABLED=true` in `.env`
 2. Start all services (LiveKit, Whisper, TTS)
-3. Open Element, start a voice call in the room
+3. Open Element Web (recommended), start a voice call in the room
 4. Bot auto-joins via MatrixRTC and processes audio in real-time
+
+> **Client compatibility:** Element X on macOS only supports Jitsi (`m.call` protocol) — it cannot connect to MatrixRTC/LiveKit bots. Use **Element Web** or **Element Desktop** (Electron) for full compatibility. Element X on Android may also work.
+
+---
+
+## 8. Troubleshooting Element Call Visibility
+
+### Bot not showing as a participant tile
+
+Element Call requires specific fields in the bot's `org.matrix.msc3401.call.member` state event. Missing any of these causes the bot to be silently invisible:
+
+- **`m.call.intent: "video"`** — the most critical field; Element Call will not render participants without it
+- **`session_id`** — required for participant identity matching
+- **`membershipID`** — required in newer Element Call versions to map LiveKit participant → Matrix user
+- **`feeds`** — declares what media the participant is publishing
+
+### Bot not audible (but visible)
+
+1. Check the browser's audio output device (Element Call sometimes defaults to wrong device)
+2. Verify bot is publishing audio to LiveKit: check service logs for `TTS WAV: ...Hz, ...PCM bytes`
+3. A dummy video track is required — Element Call will not subscribe to audio from participants with no video track
+
+### Transcriptions returning empty string (`""`)
+
+If the TypeScript VAD is already pre-gating audio before sending to Whisper, **do not** also enable `vad_filter=True` in faster-whisper. The double VAD causes Whisper to classify pre-gated speech clips as non-speech and discard them silently.
+
+Check `whisper-server.py` on the STT host — ensure `vad_filter=False` (or omit the parameter).
+
+### Bot hearing itself / echo loop
+
+VAD echo suppression suppresses the microphone during bot TTS playback. If you're still getting echoes:
+- Increase `VAD_ECHO_BUFFER_MS` (default: 300ms added to TTS playout duration)
+- Check that `suppress()`/`unsuppress()` are being called around `publishAudioBuffer()`
