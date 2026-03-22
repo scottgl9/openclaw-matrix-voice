@@ -16,6 +16,8 @@ describe('LiveKitService', () => {
       deleteRoom: vi.fn().mockResolvedValue({}),
       listRooms: vi.fn().mockResolvedValue([]),
     };
+    // deleteRoom may also reject when room doesn't exist (first call in createRoom cleanup)
+    mockRoomService.deleteRoom.mockImplementation(async () => {});
 
     // Create service with mocked dependencies
     const config: LiveKitConfig = {
@@ -57,16 +59,18 @@ describe('LiveKitService', () => {
   describe('createRoom', () => {
     it('should create a room with given matrix room ID', async () => {
       const matrixRoomId = '!test:matrix.org';
-      
+
       const room = await service.createRoom(matrixRoomId);
-      
+
       expect(room).toBeDefined();
       expect(room.roomId).toBe('RM_test123');
       expect(room.matrixRoomId).toBe(matrixRoomId);
       expect(room.participants).toEqual([]);
-      
+
+      // Room name is now SHA-256 hashed for Element Call compatibility
+      const expectedHashedName = service.hashRoomName(matrixRoomId);
       expect(mockRoomService.createRoom).toHaveBeenCalledWith({
-        name: 'matrix-call-test:matrix.org',
+        name: expectedHashedName,
         emptyTimeout: 300,
         maxParticipants: 10,
       });
@@ -74,11 +78,12 @@ describe('LiveKitService', () => {
 
     it('should auto-generate room name if not provided', async () => {
       const matrixRoomId = '!custom-room:matrix.org';
-      
+
       const room = await service.createRoom(matrixRoomId);
-      
-      expect(room.name).toContain('matrix-call-');
-      expect(room.name).toContain('custom-room');
+
+      // Room name is now a SHA-256 hash, not a readable prefix
+      const expectedHashedName = service.hashRoomName(matrixRoomId);
+      expect(room.name).toBe(expectedHashedName);
     });
 
     it('should store room for later retrieval', async () => {

@@ -95,6 +95,7 @@ describe('AudioPipelineService', () => {
 
   describe('loopback path', () => {
     it('should pass audio through loopback', async () => {
+      pipeline = new AudioPipelineService({ loopbackEnabled: true });
       await pipeline.initialize();
       await pipeline.start();
       
@@ -135,6 +136,7 @@ describe('AudioPipelineService', () => {
     });
 
     it('should handle multiple sequential injections', async () => {
+      pipeline = new AudioPipelineService({ loopbackEnabled: true });
       await pipeline.initialize();
       await pipeline.start();
       
@@ -241,6 +243,7 @@ describe('AudioPipelineService', () => {
 
   describe('AudioFrame structure', () => {
     it('should have correct frame structure from loopback', async () => {
+      pipeline = new AudioPipelineService({ loopbackEnabled: true });
       await pipeline.initialize();
       await pipeline.start();
       
@@ -264,6 +267,7 @@ describe('AudioPipelineService', () => {
     });
 
     it('should calculate duration correctly', async () => {
+      pipeline = new AudioPipelineService({ loopbackEnabled: true });
       await pipeline.initialize();
       await pipeline.start();
       

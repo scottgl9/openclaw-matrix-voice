@@ -113,9 +113,13 @@ export class TurnProcessorService extends EventEmitter {
     this.cancelled = false;
     this.setState(TurnProcessingState.TRANSCRIBING);
 
+    const turnStartMs = Date.now();
+
     try {
       // Step 1: Transcribe audio using STT
+      const sttStartMs = Date.now();
       const sttResult = await this.transcribeTurn(turnId, frames);
+      const sttMs = Date.now() - sttStartMs;
 
       if (this.cancelled) {
         console.log(`[TurnProcessor] Turn ${turnId} cancelled after STT`);
@@ -135,7 +139,9 @@ export class TurnProcessorService extends EventEmitter {
       }
 
       // Step 2: Process text through OpenClaw (with retry)
+      const llmStartMs = Date.now();
       const openClawResult = await this.processText(transcribedText);
+      const llmMs = Date.now() - llmStartMs;
 
       if (this.cancelled) {
         console.log(`[TurnProcessor] Turn ${turnId} cancelled after LLM`);
@@ -149,7 +155,9 @@ export class TurnProcessorService extends EventEmitter {
       const responseText = openClawResult.response!;
 
       // Step 3: Convert response to speech using TTS (with retry)
+      const ttsStartMs = Date.now();
       const ttsResult = await this.generateTTS(responseText);
+      const ttsMs = Date.now() - ttsStartMs;
 
       if (this.cancelled) {
         console.log(`[TurnProcessor] Turn ${turnId} cancelled after TTS`);
@@ -159,6 +167,11 @@ export class TurnProcessorService extends EventEmitter {
       if (!ttsResult.success) {
         throw new Error(ttsResult.error || 'TTS generation failed');
       }
+
+      // Latency profiling
+      const totalMs = Date.now() - turnStartMs;
+      const grade = gradeLatency(totalMs);
+      console.log(`[Latency] STT=${sttMs}ms LLM=${llmMs}ms TTS=${ttsMs}ms Total=${totalMs}ms [${grade}]`);
 
       // Step 4: Emit TTS audio for playback
       this.emitTTSAudio(turnId, responseText, ttsResult);
@@ -238,14 +251,7 @@ export class TurnProcessorService extends EventEmitter {
 
   private async generateTTS(text: string): Promise<TTSResponse> {
     // Strip markdown and truncate for voice — long responses cause TTS timeouts
-    const voiceText = text
-      .replace(/\*\*([^*]+)\*\*/g, '$1')  // bold
-      .replace(/\*([^*]+)\*/g, '$1')       // italic
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
-      .replace(/^[-*#>]+\s*/gm, '')        // bullets/headers
-      .replace(/\n+/g, ' ')               // newlines
-      .trim()
-      .slice(0, 400);
+    const voiceText = stripMarkdown(text);
     console.log(`[TurnProcessor] Generating TTS for: "${voiceText}"`);
     this.setState(TurnProcessingState.RESPONDING);
 
@@ -323,4 +329,40 @@ export class TurnProcessorService extends EventEmitter {
   isProcessing(): boolean {
     return this.state !== TurnProcessingState.IDLE;
   }
+}
+
+/**
+ * Strip markdown formatting for natural TTS output.
+ * Removes bold, italic, code, strikethrough, links, headers, lists, quotes, and bare URLs.
+ */
+export function stripMarkdown(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, '')              // code blocks
+    .replace(/`([^`]+)`/g, '$1')                 // inline code
+    .replace(/\*\*([^*]+)\*\*/g, '$1')           // bold
+    .replace(/\*([^*]+)\*/g, '$1')               // italic
+    .replace(/__([^_]+)__/g, '$1')               // underline bold
+    .replace(/_([^_]+)_/g, '$1')                 // underline italic
+    .replace(/~~([^~]+)~~/g, '$1')               // strikethrough
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')     // links
+    .replace(/^#{1,6}\s+/gm, '')                 // headers
+    .replace(/^\d+\.\s+/gm, '')                  // numbered lists
+    .replace(/^[-*+]\s+/gm, '')                  // bullet lists
+    .replace(/^>\s+/gm, '')                      // block quotes
+    .replace(/^---+$/gm, '')                     // horizontal rules
+    .replace(/https?:\/\/\S+/g, '')              // bare URLs
+    .replace(/\n+/g, ' ')                        // newlines
+    .replace(/\s{2,}/g, ' ')                     // collapse whitespace
+    .trim()
+    .slice(0, 400);
+}
+
+/**
+ * Grade end-to-end latency for voice turn processing.
+ */
+export function gradeLatency(totalMs: number): string {
+  if (totalMs < 10000) return 'EXCELLENT';
+  if (totalMs < 15000) return 'GOOD';
+  if (totalMs < 20000) return 'ACCEPTABLE';
+  return 'SLOW';
 }

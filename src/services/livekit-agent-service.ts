@@ -189,13 +189,13 @@ export class LiveKitAgentService extends EventEmitter {
    * Handles resampling from pipeline rate to LiveKit rate (48kHz).
    * Audio is published in ~20ms chunks to allow mid-stream interruption (barge-in).
    */
-  async publishAudioBuffer(audioData: Buffer, sampleRate: number): Promise<void> {
+  async publishAudioBuffer(audioData: Buffer, sampleRate: number): Promise<{ durationMs: number }> {
     if (!this.audioSource || !this.connected) {
       throw new Error('Not connected to LiveKit room');
     }
 
     const sdk = await loadRtcNode();
-    if (!sdk) return;
+    if (!sdk) return { durationMs: 0 };
 
     this.publishingAborted = false;
     this.stopSilenceHeartbeat(); // Pause heartbeat during TTS to avoid AudioSource conflicts
@@ -212,7 +212,7 @@ export class LiveKitAgentService extends EventEmitter {
     for (let offset = 0; offset < samples.length; offset += chunkSize) {
       if (this.publishingAborted) {
         console.log(`[LiveKitAgent] Publishing aborted (barge-in) at ${Math.round(offset / samples.length * 100)}%`);
-        return;
+        return { durationMs: Math.round(offset / LIVEKIT_SAMPLE_RATE * 1000) };
       }
 
       const end = Math.min(offset + chunkSize, samples.length);
@@ -247,6 +247,11 @@ export class LiveKitAgentService extends EventEmitter {
       }
     }
     this.startSilenceHeartbeat(); // Resume heartbeat after TTS
+
+    // Compute actual audio duration from PCM data
+    const totalSamples = audioData.length / 2; // 16-bit = 2 bytes per sample
+    const durationMs = (totalSamples / sampleRate) * 1000;
+    return { durationMs };
   }
 
   isConnected(): boolean {

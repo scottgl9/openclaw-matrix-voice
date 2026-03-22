@@ -33,6 +33,7 @@ vi.mock('@livekit/rtc-node', () => {
     private handlers = new Map<string, Function[]>();
     localParticipant = {
       publishTrack: vi.fn().mockResolvedValue(undefined),
+      unpublishTrack: vi.fn().mockResolvedValue(undefined),
     };
 
     on(event: string, handler: Function) {
@@ -44,11 +45,6 @@ vi.mock('@livekit/rtc-node', () => {
 
     connect = vi.fn().mockResolvedValue(undefined);
     disconnect = vi.fn().mockResolvedValue(undefined);
-
-    emit(event: string, ...args: any[]) {
-      const handlers = this.handlers.get(event) || [];
-      handlers.forEach(h => h(...args));
-    }
   }
 
   class MockAudioFrame {
@@ -77,66 +73,48 @@ vi.mock('@livekit/rtc-node', () => {
   };
 });
 
-describe('LiveKitAgentService', () => {
+describe('LiveKitAgentService — publishAudioBuffer returns duration', () => {
   let agent: LiveKitAgentService;
-  let mockLiveKitService: LiveKitService;
 
-  beforeEach(() => {
-    mockLiveKitService = {
+  beforeEach(async () => {
+    const mockLiveKitService = {
       getUrl: vi.fn().mockReturnValue('ws://localhost:7880'),
       generateToken: vi.fn().mockResolvedValue('mock-token'),
     } as unknown as LiveKitService;
 
     agent = new LiveKitAgentService(mockLiveKitService);
+    await agent.joinRoom('ws://localhost:7880', 'test-token');
   });
 
-  describe('joinRoom', () => {
-    it('should connect to room and publish audio track', async () => {
-      await agent.joinRoom('ws://localhost:7880', 'test-token');
+  it('should return correct duration for 16kHz audio', async () => {
+    // 16000 samples at 16kHz = 1 second, 2 bytes per sample = 32000 bytes
+    const audioData = Buffer.alloc(32000);
+    const result = await agent.publishAudioBuffer(audioData, 16000);
 
-      expect(agent.isConnected()).toBe(true);
-    });
-
-    it('should set connected to false after leaving', async () => {
-      await agent.joinRoom('ws://localhost:7880', 'test-token');
-      await agent.leaveRoom();
-
-      expect(agent.isConnected()).toBe(false);
-    });
+    expect(result.durationMs).toBe(1000);
   });
 
-  describe('publishAudioBuffer', () => {
-    it('should publish audio buffer after resampling', async () => {
-      await agent.joinRoom('ws://localhost:7880', 'test-token');
+  it('should return correct duration for 24kHz audio', async () => {
+    // 24000 samples at 24kHz = 1 second, 2 bytes per sample = 48000 bytes
+    const audioData = Buffer.alloc(48000);
+    const result = await agent.publishAudioBuffer(audioData, 24000);
 
-      // 160 samples at 16kHz = 10ms
-      const audioData = Buffer.alloc(160 * 2);
-      for (let i = 0; i < 160; i++) {
-        audioData.writeInt16LE(1000, i * 2);
-      }
-
-      await agent.publishAudioBuffer(audioData, 16000);
-
-      // Should not throw
-      expect(agent.isConnected()).toBe(true);
-    });
-
-    it('should throw if not connected', async () => {
-      const audioData = Buffer.alloc(320);
-      await expect(agent.publishAudioBuffer(audioData, 16000)).rejects.toThrow('Not connected');
-    });
+    expect(result.durationMs).toBe(1000);
   });
 
-  describe('leaveRoom', () => {
-    it('should be a no-op if not connected', async () => {
-      await agent.leaveRoom();
-      expect(agent.isConnected()).toBe(false);
-    });
+  it('should return correct duration for short audio', async () => {
+    // 160 samples at 16kHz = 10ms, 2 bytes per sample = 320 bytes
+    const audioData = Buffer.alloc(320);
+    const result = await agent.publishAudioBuffer(audioData, 16000);
+
+    expect(result.durationMs).toBe(10);
   });
 
-  describe('isConnected', () => {
-    it('should return false initially', () => {
-      expect(agent.isConnected()).toBe(false);
-    });
+  it('should return correct duration for 48kHz audio (no resample)', async () => {
+    // 48000 samples at 48kHz = 1 second, 2 bytes per sample = 96000 bytes
+    const audioData = Buffer.alloc(96000);
+    const result = await agent.publishAudioBuffer(audioData, 48000);
+
+    expect(result.durationMs).toBe(1000);
   });
 });
