@@ -365,10 +365,11 @@ describe('VadService', () => {
         ...defaultVadConfig,
         silenceThresholdMs: 500, // Long silence threshold
         minSpeechDurationMs: 50,
+        hangoverFrames: 3, // Low hangover so we can reach SILENCE state
         debug: true,
       });
       vad.start();
-      
+
       // Start speech
       for (let i = 0; i < 10; i++) {
         const frame = createTestFrame(160);
@@ -377,19 +378,19 @@ describe('VadService', () => {
         }
         vad.processFrame(frame);
       }
-      
+
       expect(vad.getState()).toBe(VadState.SPEECH_ACTIVE);
-      
-      // Brief silence (not enough to end turn)
-      for (let i = 0; i < 5; i++) {
+
+      // Brief silence (exceeds hangover of 3, but not enough to end turn at 500ms)
+      for (let i = 0; i < 8; i++) {
         const frame = createTestFrame(160);
         frame.data.fill(0);
         vad.processFrame(frame);
       }
-      
-      // Should be in SILENCE state
+
+      // Should be in SILENCE state (past hangover but below silenceThresholdMs)
       expect(vad.getState()).toBe(VadState.SILENCE);
-      
+
       // Speech resumes
       for (let i = 0; i < 5; i++) {
         const frame = createTestFrame(160);
@@ -398,7 +399,7 @@ describe('VadService', () => {
         }
         vad.processFrame(frame);
       }
-      
+
       // Should be back to SPEECH_ACTIVE
       expect(vad.getState()).toBe(VadState.SPEECH_ACTIVE);
     });

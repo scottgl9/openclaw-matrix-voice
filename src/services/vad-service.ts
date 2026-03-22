@@ -63,6 +63,12 @@ export interface VadConfig {
 
   /** Number of consecutive silent frames allowed during speech before transitioning to SILENCE */
   hangoverFrames: number;
+
+  /** Minimum time between turn.end events in ms (debounce rapid VAD events) */
+  debounceIntervalMs: number;
+
+  /** Minimum utterance duration in ms — skip sounds shorter than this */
+  minUtteranceDurationMs: number;
 }
 
 export const defaultVadConfig: VadConfig = {
@@ -77,6 +83,8 @@ export const defaultVadConfig: VadConfig = {
   adaptiveMultiplier: 3.0,
   adaptiveCalibrationFrames: 50, // ~1 second at 20ms frames
   hangoverFrames: 5,
+  debounceIntervalMs: 1500,
+  minUtteranceDurationMs: 300,
 };
 
 export enum VadState {
@@ -111,6 +119,12 @@ export class VadService extends EventEmitter {
   // Buffering
   private preRollBuffer: AudioFrame[] = [];
   private currentSpeechFrames: AudioFrame[] = [];
+
+  // Suppression (echo cancellation)
+  private suppressed: boolean = false;
+
+  // Debounce
+  private lastTurnEndTime: number = 0;
 
   // Statistics
   private totalSpeechDurationMs: number = 0;
@@ -162,8 +176,22 @@ export class VadService extends EventEmitter {
     return this.isRunning;
   }
 
+  suppress(): void {
+    this.suppressed = true;
+    this.log('VAD suppressed (echo cancellation)');
+  }
+
+  unsuppress(): void {
+    this.suppressed = false;
+    this.log('VAD unsuppressed');
+  }
+
+  isSuppressed(): boolean {
+    return this.suppressed;
+  }
+
   processFrame(frame: AudioFrame): void {
-    if (!this.isRunning) {
+    if (!this.isRunning || this.suppressed) {
       return;
     }
 
@@ -306,6 +334,26 @@ export class VadService extends EventEmitter {
       const silenceDuration = silenceFrames * this.config.frameDurationMs;
 
       if (silenceDuration >= this.config.silenceThresholdMs) {
+        // Check minimum utterance duration before emitting turn
+        const speechFrames = this.frameCounter - this.speechStartFrameCounter + 1;
+        const speechDuration = speechFrames * this.config.frameDurationMs;
+
+        if (speechDuration < this.config.minUtteranceDurationMs) {
+          this.log(`Utterance too short (${speechDuration}ms < ${this.config.minUtteranceDurationMs}ms), skipping`);
+          this.resetTurnState();
+          this.state = VadState.IDLE;
+          return;
+        }
+
+        // Debounce: skip if too soon after last turn.end
+        const now = Date.now();
+        if (this.lastTurnEndTime > 0 && (now - this.lastTurnEndTime) < this.config.debounceIntervalMs) {
+          this.log(`Debounced turn.end (${now - this.lastTurnEndTime}ms < ${this.config.debounceIntervalMs}ms)`);
+          this.resetTurnState();
+          this.state = VadState.IDLE;
+          return;
+        }
+
         this.emitSpeechEnd();
         this.emitTurnEnd();
         this.state = VadState.IDLE;
@@ -353,15 +401,8 @@ export class VadService extends EventEmitter {
     this.preRollBuffer = [];
   }
 
-  private emitTurnEnd(): void {
-    if (this.currentTurnId === null) {
-      return;
-    }
-
-    const turnId = this.currentTurnId;
-    this.turnsCompleted++;
+  private resetTurnState(): void {
     this.currentTurnId = null;
-
     this.speechStartTime = 0;
     this.speechStartFrameCounter = 0;
     this.silenceStartTime = 0;
@@ -369,6 +410,17 @@ export class VadService extends EventEmitter {
     this.consecutiveSilentFrames = 0;
     this.currentSpeechFrames = [];
     this.preRollBuffer = [];
+  }
+
+  private emitTurnEnd(): void {
+    if (this.currentTurnId === null) {
+      return;
+    }
+
+    const turnId = this.currentTurnId;
+    this.turnsCompleted++;
+    this.lastTurnEndTime = Date.now();
+    this.resetTurnState();
 
     const event: VadEvent = {
       type: VadEventType.TURN_END,

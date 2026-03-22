@@ -35,14 +35,16 @@ describe('ChatterboxTTSService', () => {
         {
           text: 'Hello world',
           format: 'wav',
-          sampleRate: 16000,
+          sampleRate: 24000,
+          exaggeration: 0.5,
+          cfg_weight: 0.3,
         },
         expect.objectContaining({
           headers: expect.objectContaining({
             Authorization: `Bearer ${mockApiKey}`,
           }),
           responseType: 'arraybuffer',
-          timeout: 30000,
+          timeout: 90000,
         })
       );
     });

@@ -539,18 +539,24 @@ export class VoiceCallHandler {
           callState.botSpeaking = true;
           if (callState.ttsPlaybackTimer) clearTimeout(callState.ttsPlaybackTimer);
 
-          await callState.livekitAgent.publishAudioBuffer(pcmData, wavSampleRate);
+          // Suppress VAD during playback to prevent echo feedback
+          callState.vadService?.suppress();
 
-          // Keep botSpeaking true briefly after publishing to suppress
-          // echo from speakers → mic feedback loop
+          const { durationMs: playoutMs } = await callState.livekitAgent.publishAudioBuffer(pcmData, wavSampleRate);
+
+          // Keep botSpeaking true for actual playout duration + buffer
+          // to account for network transport delay
+          const echoGuardMs = playoutMs + 300;
           callState.ttsPlaybackTimer = setTimeout(() => {
             callState.botSpeaking = false;
-          }, 1500);
+            callState.vadService?.unsuppress();
+          }, echoGuardMs);
         } else {
           await this.matrixService.sendAudio(roomId, event.audioData, event.mimeType);
         }
       } catch (error: any) {
         callState.botSpeaking = false;
+        callState.vadService?.unsuppress();
         console.error('[VoiceCallHandler] Error sending TTS audio:', error.message);
         // Always send error feedback to user
         await this.matrixService.sendMessage(roomId, `Could not send audio response: ${event.responseText}`).catch(() => {});
