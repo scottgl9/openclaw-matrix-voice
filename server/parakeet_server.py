@@ -15,16 +15,17 @@ Usage:
     python server/parakeet_server.py
 
 Environment variables:
-    PARAKEET_MODEL   Model name (default: nvidia/parakeet-tdt-1.1b)
+    PARAKEET_MODEL   Model name (default: nvidia/parakeet-tdt-0.6b-v3)
     PARAKEET_PORT    Server port (default: 8001)
     PARAKEET_HOST    Server host (default: 0.0.0.0)
     PARAKEET_DEVICE  Device hint: auto, cuda, cpu (default: auto)
 
 Model options:
-    nvidia/parakeet-tdt-1.1b       Best accuracy, ~real-time on RTX (recommended)
-    nvidia/parakeet-ctc-1.1b       Slightly faster, similar accuracy
+    nvidia/parakeet-tdt-0.6b-v3    25 langs, punctuation, timestamps, ~2GB VRAM (recommended)
+    nvidia/parakeet-tdt-0.6b-v2    English-only, fastest, ~2GB VRAM
+    nvidia/parakeet-tdt-1.1b       Higher accuracy, ~5GB VRAM
     nvidia/parakeet-tdt_ctc-110m   Fast, lower accuracy — good for weaker GPU
-    nvidia/canary-1b               Multilingual + punctuation/capitalization
+    nvidia/canary-1b-v2            Multilingual 25 langs + translation
 """
 
 import io
@@ -42,7 +43,7 @@ from fastapi.responses import JSONResponse
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("parakeet_server")
 
-MODEL_NAME = os.environ.get("PARAKEET_MODEL", "nvidia/parakeet-tdt-1.1b")
+MODEL_NAME = os.environ.get("PARAKEET_MODEL", "nvidia/parakeet-tdt-0.6b-v3")
 PORT = int(os.environ.get("PARAKEET_PORT", "8001"))
 HOST = os.environ.get("PARAKEET_HOST", "0.0.0.0")
 DEVICE = os.environ.get("PARAKEET_DEVICE", "auto")
