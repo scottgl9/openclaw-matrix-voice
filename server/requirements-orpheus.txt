@@ -1,0 +1,14 @@
+# Orpheus TTS Server dependencies
+#
+# IMPORTANT: llama-cpp-python must be installed WITH CUDA support:
+#   CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python --upgrade --force-reinstall
+#
+# If you install without CUDA first, force reinstall with the flag above.
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+numpy>=1.24.0
+snac>=1.2.1
+torch>=2.2.0
+huggingface-hub>=0.20.0
+# llama-cpp-python installed separately with CUDA flag (see above)

@@ -1,0 +1,17 @@
+# Parakeet STT Server dependencies
+#
+# Install:
+#   pip install -r server/requirements-parakeet.txt
+#
+# For GPU (CUDA 12.x):
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#   pip install nemo_toolkit[asr]
+#
+# For CPU only (slower, not recommended for real-time):
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+#   pip install nemo_toolkit[asr]
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+nemo_toolkit[asr]>=2.0.0
+torch>=2.2.0

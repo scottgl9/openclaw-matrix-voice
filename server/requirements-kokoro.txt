@@ -1,0 +1,13 @@
+# Kokoro TTS Server dependencies
+#
+# Install:
+#   pip install -r server/requirements-kokoro.txt
+#
+# Kokoro runs efficiently on CPU but GPU gives better RTF on long texts.
+# For short voice-call utterances (1-3 sentences), CPU is typically fast enough.
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+kokoro>=0.9.4
+soundfile>=0.12.1
+numpy>=1.24.0
