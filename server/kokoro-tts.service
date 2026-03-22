@@ -1,0 +1,17 @@
+[Unit]
+Description=Kokoro TTS Server (Kokoro-82M)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/openclaw-matrix-voice
+Environment="KOKORO_PORT=8000"
+Environment="KOKORO_HOST=0.0.0.0"
+ExecStart=/usr/bin/uvicorn server.kokoro_server:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

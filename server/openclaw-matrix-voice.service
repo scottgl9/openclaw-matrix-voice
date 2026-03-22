@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenClaw Matrix Voice Bot
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/openclaw-matrix-voice
+EnvironmentFile=%h/openclaw-matrix-voice/.env
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

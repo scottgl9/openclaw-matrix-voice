@@ -43,13 +43,17 @@ export class OpenClawService {
   private token: string;
   private rateLimiter: RateLimiter;
   private systemMessage: ChatCompletionMessage;
-  private conversationHistory: ChatCompletionMessage[] = [];
+  /** Per-agent conversation histories keyed by agentId */
+  private agentHistories: Map<string, ChatCompletionMessage[]> = new Map();
   private maxHistory: number;
+  /** Currently active agent ID (set when a call starts, used as default) */
+  private activeAgentId: string;
 
   constructor(baseUrl?: string, token?: string) {
     this.baseUrl = baseUrl || config.openclaw.apiUrl;
     this.token = token || config.openclaw.apiToken;
     this.maxHistory = config.openclaw.maxConversationHistory;
+    this.activeAgentId = config.voiceAgents.defaultAgentId;
     this.systemMessage = {
       role: 'system',
       content: config.openclaw.systemPrompt,
@@ -61,18 +65,74 @@ export class OpenClawService {
     });
   }
 
-  async processText(text: string): Promise<OpenClawResponse> {
+  /**
+   * Set the active agent for the current call.
+   * Clears conversation history when switching agents.
+   */
+  setActiveAgent(agentId: string): void {
+    if (agentId !== this.activeAgentId) {
+      log.info(`Switching voice agent: ${this.activeAgentId} → ${agentId}`);
+      this.activeAgentId = agentId;
+    }
+  }
+
+  /**
+   * Resolve agent ID for a given Matrix room.
+   */
+  static resolveAgentForRoom(roomId: string): string {
+    return config.voiceAgents.roomMap[roomId] || config.voiceAgents.defaultAgentId;
+  }
+
+  getActiveAgentId(): string {
+    return this.activeAgentId;
+  }
+
+  private getHistory(agentId: string): ChatCompletionMessage[] {
+    if (!this.agentHistories.has(agentId)) {
+      this.agentHistories.set(agentId, []);
+    }
+    return this.agentHistories.get(agentId)!;
+  }
+
+  private trimAgentHistory(agentId: string): void {
+    const history = this.getHistory(agentId);
+    if (history.length > this.maxHistory) {
+      const trimmed = history.slice(-this.maxHistory);
+      this.agentHistories.set(agentId, trimmed);
+    }
+  }
+
+  async processText(text: string, agentId?: string): Promise<OpenClawResponse> {
     await this.rateLimiter.acquire();
 
-    this.conversationHistory.push({ role: 'user', content: text });
-    this.trimHistory();
+    const resolvedAgent = agentId || this.activeAgentId;
+    const history = this.getHistory(resolvedAgent);
+    history.push({ role: 'user', content: text });
+    this.trimAgentHistory(resolvedAgent);
 
-    try {
-      const response = await axios.post<ChatCompletionResponse>(
+    const makeRequest = async () => {
+      // Build per-agent system prompt:
+      // 1. Use explicit prompt from VOICE_AGENT_PROMPTS if configured
+      // 2. Otherwise use default prompt with agent name injected from VOICE_AGENT_NAMES
+      const agentPromptText = config.voiceAgents.agentPrompts[resolvedAgent];
+      const agentName = config.voiceAgents.agentNames[resolvedAgent];
+      let systemMsg: ChatCompletionMessage;
+      if (agentPromptText) {
+        systemMsg = { role: 'system', content: agentPromptText };
+      } else if (agentName) {
+        systemMsg = {
+          role: 'system',
+          content: `${this.systemMessage.content} Your name is ${agentName}.`,
+        };
+      } else {
+        systemMsg = this.systemMessage;
+      }
+
+      return axios.post<ChatCompletionResponse>(
         `${this.baseUrl}/v1/chat/completions`,
         {
-          model: `openclaw:${config.openclaw.agentId}`,
-          messages: [this.systemMessage, ...this.conversationHistory],
+          model: `openclaw:${resolvedAgent}`,
+          messages: [systemMsg, ...this.getHistory(resolvedAgent)],
           stream: false,
         },
         {
@@ -83,34 +143,23 @@ export class OpenClawService {
           timeout: 60000,
         }
       );
+    };
 
+    try {
+      const response = await makeRequest();
       let assistantMessage = response.data.choices?.[0]?.message?.content || '';
 
       // Retry once if empty response (gateway may rate-limit rapid requests)
       if (!assistantMessage) {
-        console.warn('[OpenClaw] Empty response, retrying once...');
+        console.warn(`[OpenClaw] Empty response from ${resolvedAgent}, retrying once...`);
         await new Promise(resolve => setTimeout(resolve, 500));
-        const retry = await axios.post<ChatCompletionResponse>(
-          `${this.baseUrl}/v1/chat/completions`,
-          {
-            model: `openclaw:${config.openclaw.agentId}`,
-            messages: [this.systemMessage, ...this.conversationHistory],
-            stream: false,
-          },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${this.token}`,
-            },
-            timeout: 60000,
-          }
-        );
+        const retry = await makeRequest();
         assistantMessage = retry.data.choices?.[0]?.message?.content || '';
       }
 
       if (assistantMessage) {
-        this.conversationHistory.push({ role: 'assistant', content: assistantMessage });
-        this.trimHistory();
+        history.push({ role: 'assistant', content: assistantMessage });
+        this.trimAgentHistory(resolvedAgent);
       }
 
       // Agent chose to stay silent — either NO_REPLY (stripped by gateway) or explicit [SILENT] token
@@ -133,13 +182,19 @@ export class OpenClawService {
     }
   }
 
-  clearHistory(): void {
-    this.conversationHistory = [];
+  /**
+   * Clear conversation history for a specific agent, or the active agent if not specified.
+   */
+  clearHistory(agentId?: string): void {
+    const target = agentId || this.activeAgentId;
+    this.agentHistories.delete(target);
+    log.info(`Cleared conversation history for agent: ${target}`);
   }
 
-  private trimHistory(): void {
-    if (this.conversationHistory.length > this.maxHistory) {
-      this.conversationHistory = this.conversationHistory.slice(-this.maxHistory);
-    }
+  /**
+   * Clear all agent histories.
+   */
+  clearAllHistory(): void {
+    this.agentHistories.clear();
   }
 }

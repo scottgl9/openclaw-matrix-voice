@@ -1,0 +1,19 @@
+[Unit]
+Description=Parakeet STT Server (nvidia/parakeet-tdt-0.6b-v3)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/openclaw-matrix-voice
+Environment="PARAKEET_MODEL=nvidia/parakeet-tdt-0.6b-v3"
+Environment="PARAKEET_PORT=8001"
+Environment="PARAKEET_HOST=0.0.0.0"
+Environment="PARAKEET_DEVICE=auto"
+ExecStart=/usr/bin/uvicorn server.parakeet_server:app --host 0.0.0.0 --port 8001
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

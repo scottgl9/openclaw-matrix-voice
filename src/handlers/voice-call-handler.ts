@@ -14,6 +14,8 @@ import { CallStore, StoredCallSession } from '../services/call-store.js';
 export interface CallState {
   isActive: boolean;
   roomId: string;
+  /** OpenClaw agent ID resolved from room-to-agent mapping */
+  agentId: string;
   lastActivity: Date;
   transcription?: string;
   audioPipeline?: AudioPipelineService;
@@ -285,9 +287,13 @@ export class VoiceCallHandler {
       const agent = new LiveKitAgentService(liveKitService);
       await agent.joinRoom(liveKitService.getUrl(), token);
 
+      const agentId = OpenClawService.resolveAgentForRoom(roomId);
+      this.openClawService.setActiveAgent(agentId);
+
       const callState: CallState = {
         isActive: true,
         roomId,
+        agentId,
         lastActivity: new Date(),
         isLiveKitCall: true,
         livekitAgent: agent,
@@ -346,9 +352,14 @@ export class VoiceCallHandler {
       const wsUrl = liveKitService.getUrl();
       await agent.joinRoom(wsUrl, token);
 
+      const agentId = OpenClawService.resolveAgentForRoom(roomId);
+      this.openClawService.setActiveAgent(agentId);
+      console.log(`[VoiceCallHandler] Resolved voice agent for room ${roomId}: ${agentId}`);
+
       const callState: CallState = {
         isActive: true,
         roomId,
+        agentId,
         lastActivity: new Date(),
         isLiveKitCall: true,
         livekitAgent: agent,
@@ -380,9 +391,14 @@ export class VoiceCallHandler {
   async startCall(roomId: string, useLiveKit = false): Promise<void> {
     console.log(`Starting voice call in ${roomId} (livekit: ${useLiveKit})`);
 
+    const agentId = OpenClawService.resolveAgentForRoom(roomId);
+    this.openClawService.setActiveAgent(agentId);
+    console.log(`[VoiceCallHandler] Resolved voice agent for room ${roomId}: ${agentId}`);
+
     const callState: CallState = {
       isActive: true,
       roomId,
+      agentId,
       lastActivity: new Date(),
       isLiveKitCall: false,
     };
@@ -622,6 +638,11 @@ export class VoiceCallHandler {
         }
       }
 
+      // Clear conversation history for this agent when the call ends
+      if (callState.agentId) {
+        this.openClawService.clearHistory(callState.agentId);
+      }
+
       this.activeCalls.delete(roomId);
       await this.callStore.removeSession(roomId);
     }
@@ -683,7 +704,7 @@ export class VoiceCallHandler {
 
     callState.lastActivity = new Date();
 
-    const response = await this.openClawService.processText(body);
+    const response = await this.openClawService.processText(body, callState.agentId);
 
     if (response.success && response.response) {
       const ttsResult = await this.ttsService.textToSpeechCached(response.response);

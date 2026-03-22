@@ -16,6 +16,13 @@ export interface Config {
     systemPrompt: string;
     maxConversationHistory: number;
   };
+  voiceAgents: {
+    defaultAgentId: string;
+    roomMap: Record<string, string>;
+    agentPrompts: Record<string, string>;
+    /** Display names for each agent. Used in auto-generated system prompts. */
+    agentNames: Record<string, string>;
+  };
   chatterbox: {
     ttsUrl: string;
     apiKey?: string;
@@ -74,6 +81,32 @@ export const config: Config = {
     agentId: process.env.OPENCLAW_AGENT_ID || 'personal-agent',
     systemPrompt: process.env.OPENCLAW_SYSTEM_PROMPT || 'You are a helpful voice assistant. Keep responses brief and conversational — 1-2 sentences max. Avoid markdown, bullet points, or formatted text. Speak naturally as if in a phone call.',
     maxConversationHistory: parseInt(process.env.MAX_CONVERSATION_HISTORY || '20', 10),
+  },
+  voiceAgents: {
+    defaultAgentId: process.env.VOICE_AGENT_DEFAULT || process.env.OPENCLAW_AGENT_ID || 'personal-voice-agent',
+    roomMap: (() => {
+      try {
+        return process.env.VOICE_AGENT_MAP ? JSON.parse(process.env.VOICE_AGENT_MAP) : {};
+      } catch {
+        return {};
+      }
+    })(),
+    /** Per-agent system prompts. JSON map: agentId → system prompt string. */
+    agentPrompts: (() => {
+      try {
+        return process.env.VOICE_AGENT_PROMPTS ? JSON.parse(process.env.VOICE_AGENT_PROMPTS) : {};
+      } catch {
+        return {};
+      }
+    })(),
+    /** Per-agent display names. JSON map: agentId → name string. */
+    agentNames: (() => {
+      try {
+        return process.env.VOICE_AGENT_NAMES ? JSON.parse(process.env.VOICE_AGENT_NAMES) : {};
+      } catch {
+        return {};
+      }
+    })(),
   },
   chatterbox: {
     ttsUrl: process.env.CHATTERBOX_TTS_URL || 'http://localhost:8000/tts',

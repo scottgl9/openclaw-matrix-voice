@@ -1,0 +1,17 @@
+[Unit]
+Description=Orpheus TTS Server (Orpheus-3B via llama.cpp)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/openclaw-matrix-voice
+Environment="ORPHEUS_PORT=8000"
+Environment="ORPHEUS_HOST=0.0.0.0"
+ExecStart=/usr/bin/uvicorn server.orpheus_server:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
